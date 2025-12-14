@@ -1,0 +1,1423 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(fitzRoy)
+library(dplyr)
+library(jsonlite)
+library(lubridate)
+library(visdat)
+```
+
+```{r}
+# run script in terminal to perform preprocessing of info to be sent into python
+
+preprocess_fixture <- function(fixture) {
+    # create new column for each state.
+    fixture_clean <- fixture %>% mutate(region = case_when(
+        venue %in% c('Adelaide Hills', 'Adelaide Oval', 'Norwood Oval', 'Football Park') ~ "SA",
+        venue %in% c('M.C.G.', 'Docklands', 'Eureka Stadium', 'Kardinia Park', 'Marvel Stadium',
+                     'GMHBA Stadium', 'Mars Stadium') ~ "VIC",
+        venue %in% c('Carrara', 'Gabba', "Cazaly's Stadium", "Riverway Stadium") ~ "QLD",
+        venue %in% c('S.C.G.', 'Sydney Showground', 'Stadium Australia', 'Blacktown') ~ "NSW",
+        venue %in% c('Marrara Oval', 'Traeger Park') ~ 'NT',
+        venue %in% c('Bellerive Oval', 'York Park', 'University of Tasmania Stadium') ~ "TAS",
+        venue %in% c('Manuka Oval', 'UNSW Canberra Oval') ~ 'ACT',
+        venue %in% c('Perth Stadium', 'Optus Stadium', 'Subiaco') ~ 'WA',
+        venue %in% c('Jiangwan Stadium', 'Adelaide Arena at Jiangwan Stadium') ~ 'CHN',
+        venue %in% c('Wellington') ~ 'NZL',
+        TRUE ~ NA_character_  # set NA for all other observations
+    ))
+
+    
+    fixture_clean$date <- as.Date(fixture_clean$localtime)
+    fixture_clean$time <- format(ymd_hms(fixture_clean$localtime), "%H:%M:%S")
+    fixture_clean$home_win <- ifelse(fixture_clean$hscore > fixture_clean$ascore, 1, 0) 
+    fixture_clean$away_win <- ifelse(fixture_clean$hscore < fixture_clean$ascore, 1, 0)
+    fixture_clean$hdiff <- fixture_clean$hscore - fixture_clean$ascore
+    
+    # select specific rows
+    fixture_clean <- select(fixture_clean, year, round, date, time, region, venue, hteam, ateam, hscore, ascore,
+    hdiff, is_grand_final, is_final, home_win, away_win, id)
+    
+    return(fixture_clean)
+}
+```
+
+```{r}
+# get the individual player data
+player_stats = fetch_player_stats_afl(season = 2023)
+```
+
+```{r}
+fixture_23 <- fetch_fixture_squiggle(2023)
+```
+
+```{r}
+fixture_df <- preprocess_fixture(fixture_23)
+fixture_df
+```
+
+```{r}
+results_afl_2023 = fetch_results_afl(season = 2023) # state and weather data
+```
+
+```{r}
+# check if any NA values are present
+any(is.na(player_stats))
+```
+
+```{r}
+# remove useless columns
+player_df <- subset(player_stats, 
+                    select = c(-home.team.name, # home.team.club.name used instead due to indigenous round naming
+                               -away.team.name,
+                               -player.photoURL,
+                               -gamesPlayed, # these cols are all missing all values
+                               -superGoals,
+                               -ranking,
+                               -lastUpdated,
+                               -goalEfficiency,
+                               -shotEfficiency,
+                               -interchangeCounts)) 
+
+# Establish universal team names across character data
+player_df <- player_df %>%
+  # rename columns
+  rename(c(round = round.roundNumber,hteam = home.team.club.name, ateam = away.team.club.name)) %>% 
+  # Establish universal team names across character data
+  mutate(across(where(is.character), ~replace(.x, .x %in% c("Geelong Cats"), "Geelong"))) %>% 
+  mutate(across(where(is.character), ~replace(.x, .x %in% c("West Coast Eagles", "Waalitj Marawar"), "West Coast"))) %>% 
+  mutate(across(where(is.character), ~replace(.x, .x %in% c("Gold Coast SUNS"), "Gold Coast"))) %>% 
+  mutate(across(where(is.character), ~replace(.x, .x %in% c("Sydney Swans"), "Sydney"))) %>% 
+  mutate(across(where(is.character), ~replace(.x, .x %in% c("GWS GIANTS"), "Greater Western Sydney"))) %>%
+  mutate(across(where(is.character), ~replace(.x, .x %in% c("Adelaide Crows", "Kuwarna"), "Adelaide"))) %>% 
+  mutate(across(where(is.character), ~replace(.x, .x %in% c("Yartapuulti"), "Port Adelaide"))) %>% 
+  mutate(across(where(is.character), ~replace(.x, .x %in% c("Narrm"), "Melbourne"))) %>% 
+  mutate(across(where(is.character), ~replace(.x, .x %in% c("Euro-Yroke"), "St Kilda"))) %>% 
+  mutate(across(where(is.character), ~replace(.x, .x %in% c("Walyalup"), "Fremantle"))) %>% 
+  # set column for the full player name
+  mutate(full.name = paste(player.player.player.givenName, player.player.player.surname, sep = " "))
+
+# remove rows not neccessary
+player_df <- subset(player_df, select = -c(providerId, 
+                                          utcStartTime,
+                                          status,
+                                          compSeason.shortName,
+                                          round.name,
+                                          player.player.player.playerId,
+                                          player.player.player.playerJumperNumber,
+                                          teamId,
+                                          player.playerId,
+                                          player.playerJumperNumber,
+                                          player.givenName,
+                                          player.surname,
+                                          player.captain,
+                                          player.jumperNumber,
+                                          player.player.player.givenName,
+                                          player.player.player.surname))
+
+player_df
+```
+
+```{r}
+# remove individual level data
+team_df <- subset(player_df, select = -c(player.player.position,
+                                         player.player.player.captain,
+                                         full.name))
+
+# summarise the individual data by taking the average of each of the stats
+hteam_df <- team_df %>%
+  filter(teamStatus == "home") %>% 
+  group_by(round, team.name, teamStatus) %>%
+  summarise( # ht = home team
+    ht_avg_time_on_ground = mean(timeOnGroundPercentage),
+    ht_goals = sum(goals), # total goals
+    ht_behinds = sum(behinds), # total behinds
+    ht_kicks = sum(kicks), 
+    ht_handballs = sum(handballs),
+    ht_disposals = sum(disposals)) %>% 
+  rename(hteam = team.name) # %>%  # rename for joining
+
+ateam_df <- team_df %>%
+  filter(teamStatus == "away") %>% 
+  group_by(round, team.name, teamStatus) %>%
+  summarise( # at = away team
+    at_avg_time_on_ground = mean(timeOnGroundPercentage),
+    at_goals = sum(goals),
+    at_behinds = sum(behinds),
+    at_kicks = sum(kicks),
+    at_handballs = sum(handballs),
+    at_disposals = sum(disposals)) %>% 
+  rename(ateam = team.name) #%>%  # rename for joining
+
+hteam_df
+ateam_df
+
+final_df <- fixture_df %>% 
+  right_join(hteam_df, by = c('round', 'hteam')) %>% 
+  right_join(ateam_df, by = c('round', 'ateam'))
+
+final_df
+```
+
+```{r}
+# CURRENT CELL WORKING ON
+
+# remove individual level data
+team_df <- subset(player_df, select = -c(player.player.position,
+                                         player.player.player.captain,
+                                         full.name))
+
+# summarise the individual data by taking the average of each of the stats
+hteam_df <- team_df %>%
+  filter(teamStatus == "home") %>% 
+  group_by(round, team.name, teamStatus) %>%
+  summarise( # ht = home team
+    avg_time_on_ground = mean(timeOnGroundPercentage), # mean
+    goals = sum(goals), 
+    behinds = sum(behinds), 
+    kicks = sum(kicks), 
+    handballs = sum(handballs),
+    disposals = sum(disposals),
+    marks = sum(marks),
+    bounces = sum(bounces),
+    tackles = sum(tackles),
+    contested_possessions = sum(contestedPossessions),
+    uncontested_possessions = sum(uncontestedPossessions),
+    total_possessions = sum(totalPossessions),
+    inside_50s = sum(inside50s),
+    marks_inside_50 = sum(marksInside50),
+    contested_marks = sum(contestedMarks),
+    hitouts = sum(hitouts),
+    one_percenters = sum(onePercenters),
+    disposal_efficiency = mean(disposalEfficiency), # mean
+    clangers = sum(clangers),
+    frees_for = sum(freesFor),
+    frees_against = sum(freesAgainst),
+    dream_team_points = sum(dreamTeamPoints),
+    rebound_50s = sum(rebound50s),
+    goal_assists = sum(goalAssists),
+    goal_accuracy = mean(goalAccuracy), # mean
+    rating_points = sum(ratingPoints),
+    turnovers = sum(turnovers), 
+    intercepts = sum(intercepts),
+    tackles_inside_50 = sum(tacklesInside50),
+    shots_at_goal = sum(shotsAtGoal),
+    score_involvements = sum(scoreInvolvements),
+    metres_gained = sum(metresGained),
+    centre_clearances = sum(clearances.centreClearances),
+    stoppage_clearances = sum(clearances.stoppageClearances),
+    total_clearances = sum(clearances.totalClearances),
+    effective_kicks = sum(extendedStats.effectiveKicks),
+    kick_efficiency = mean(extendedStats.kickEfficiency), # mean
+    kick_to_handball_ratio = mean(extendedStats.kickToHandballRatio), # mean
+    effective_disposals = sum(extendedStats.effectiveDisposals),
+    marks_on_lead = sum(extendedStats.marksOnLead),
+    intercept_marks = sum(extendedStats.interceptMarks),
+    contested_possession_rate = mean(extendedStats.contestedPossessionRate), # mean
+    hitouts_to_advantage = sum(extendedStats.hitoutsToAdvantage),
+    hitout_win_percentage = mean(extendedStats.hitoutWinPercentage), # mean
+    hitout_to_advantage_rate = mean(extendedStats.hitoutToAdvantageRate), # mean
+    ground_ball_gets = sum(extendedStats.groundBallGets),
+    f50_ground_ball_gets = sum(extendedStats.f50GroundBallGets),
+    score_launches = sum(extendedStats.scoreLaunches),
+    pressure_acts = sum(extendedStats.pressureActs),
+    def_half_pressure_acts = sum(extendedStats.defHalfPressureActs),
+    spoils = sum(extendedStats.spoils),
+    ruck_contests = sum(extendedStats.ruckContests),
+    contest_def_one_on_ones = sum(extendedStats.contestDefOneOnOnes),
+    contest_def_losses = sum(extendedStats.contestDefLosses),
+    contest_def_loss_percentage = mean(extendedStats.contestDefLossPercentage), # mean
+    contest_off_one_on_ones = sum(extendedStats.contestOffOneOnOnes),
+    contest_off_wins = sum(extendedStats.contestOffWins),
+    contest_off_wins_percentage = mean(extendedStats.contestOffWinsPercentage), # mean
+    centre_bounce_attendances = sum(extendedStats.centreBounceAttendances),
+    kickins = sum(extendedStats.kickins),
+    kickins_playon = sum(extendedStats.kickinsPlayon)) %>% 
+  rename(team = team.name) # %>%  # rename for joining
+
+ateam_df <- team_df %>%
+  filter(teamStatus == "away") %>% 
+  group_by(round, team.name, teamStatus) %>%
+  summarise( # at = away team
+    avg_time_on_ground = mean(timeOnGroundPercentage),
+    goals = sum(goals), # average goals
+    behinds = sum(behinds), # total behinds
+    kicks = sum(kicks), 
+    handballs = sum(handballs),
+    disposals = sum(disposals),
+    marks = sum(marks),
+    bounces = sum(bounces),
+    tackles = sum(tackles),
+    contested_possessions = sum(contestedPossessions),
+    uncontested_possessions = sum(uncontestedPossessions),
+    total_possessions = sum(totalPossessions),
+    inside_50s = sum(inside50s),
+    marks_inside_50 = sum(marksInside50),
+    contested_marks = sum(contestedMarks),
+    hitouts = sum(hitouts),
+    one_percenters = sum(onePercenters),
+    disposal_efficiency = mean(disposalEfficiency), # mean
+    clangers = sum(clangers),
+    frees_for = sum(freesFor),
+    frees_against = sum(freesAgainst),
+    dream_team_points = sum(dreamTeamPoints),
+    rebound_50s = sum(rebound50s),
+    goal_assists = sum(goalAssists),
+    goal_accuracy = mean(goalAccuracy), # mean
+    rating_points = sum(ratingPoints),
+    turnovers = sum(turnovers),
+    intercepts = sum(intercepts),
+    tackles_inside_50 = sum(tacklesInside50),
+    shots_at_goal = sum(shotsAtGoal),
+    score_involvements = sum(scoreInvolvements),
+    metres_gained = sum(metresGained),
+    centre_clearances = sum(clearances.centreClearances),
+    stoppage_clearances = sum(clearances.stoppageClearances),
+    total_clearances = sum(clearances.totalClearances),
+    effective_kicks = sum(extendedStats.effectiveKicks),
+    kick_efficiency = mean(extendedStats.kickEfficiency), # mean
+    kick_to_handball_ratio = mean(extendedStats.kickToHandballRatio), # mean
+    effective_disposals = sum(extendedStats.effectiveDisposals),
+    marks_on_lead = sum(extendedStats.marksOnLead),
+    intercept_marks = sum(extendedStats.interceptMarks),
+    contested_possession_rate = mean(extendedStats.contestedPossessionRate), #mean
+    hitouts_to_advantage = sum(extendedStats.hitoutsToAdvantage),
+    hitout_win_percentage = mean(extendedStats.hitoutWinPercentage), # mean
+    hitout_to_advantage_rate = mean(extendedStats.hitoutToAdvantageRate), # mean
+    ground_ball_gets = sum(extendedStats.groundBallGets),
+    f50_ground_ball_gets = sum(extendedStats.f50GroundBallGets),
+    score_launches = sum(extendedStats.scoreLaunches),
+    pressure_acts = sum(extendedStats.pressureActs),
+    def_half_pressure_acts = sum(extendedStats.defHalfPressureActs),
+    spoils = sum(extendedStats.spoils),
+    ruck_contests = sum(extendedStats.ruckContests),
+    contest_def_one_on_ones = sum(extendedStats.contestDefOneOnOnes),
+    contest_def_losses = sum(extendedStats.contestDefLosses),
+    contest_def_loss_percentage = mean(extendedStats.contestDefLossPercentage), # mean
+    contest_off_one_on_ones = sum(extendedStats.contestOffOneOnOnes),
+    contest_off_wins = sum(extendedStats.contestOffWins),
+    contest_off_wins_percentage = mean(extendedStats.contestOffWinsPercentage), # mean
+    centre_bounce_attendances = sum(extendedStats.centreBounceAttendances),
+    kickins = sum(extendedStats.kickins),
+    kickins_playon = sum(extendedStats.kickinsPlayon)) %>% 
+  rename(team = team.name) #%>%  # rename for joining
+
+# combine statistics of home and away teams
+combined_stats <- bind_rows(hteam_df, ateam_df)
+
+# lag each combined stat for each team by one round
+lagged_stats <- combined_stats %>%
+  group_by(team) %>%
+  arrange(team, round) %>% # code below lags features
+  mutate(across(starts_with(c("avg_time_on_ground","goals", "behinds", "kicks", 
+                              "handballs", "disposals", "marks", "bounces", "tackles", 
+                              "contested_possessions", "uncontested_possessions", "total_possessions",
+                              "inside_50s", "marks_inside_50", "contested_marks", "hitouts", 
+                              "one_percenters", "disposal_efficiency", "clangers", "frees_for",
+                              "frees_against", "dream_team_points", "rebound_50s", "goal_assists",
+                              "goal_accuracy", "rating_points", "turnovers", "intercepts", "tackles_inside_50",
+                              "shots_at_goal", "score_involvements", "metres_gained", "centre_clearances",
+                              "stoppage_clearances", "total_clearances", "effective_kicks", "kick_efficiency",
+                              "kick_to_handball_ratio", "effective_disposals", "marks_on_lead", "intercept_marks",
+                              "contested_possession_rate", "hitouts_to_advantage", "hitout_win_percentage",
+                              "hitout_to_advantage_rate", "ground_ball_gets", "f50_ground_ball_gets", "score_launches",
+                              "pressure_acts", "def_half_pressure_acts", "spoils", "ruck_contests", 
+                              "contest_def_one_on_ones", "contest_def_losses", "contest_def_loss_percentage", 
+                              "contest_off_one_on_ones", "contest_off_wins", "contest_off_wins_percentage",
+                              "centre_bounce_attendances", "kickins", "kickins_playon")), lag)) %>% 
+  mutate_all(~replace(., is.na(.), 0)) %>% # replace NA values with zero 
+  # add cumulative statistics for the round
+  mutate(cum_avg_time_on_ground = cummean(avg_time_on_ground), cum_goals = cummean(goals),
+         cum_behinds = cummean(behinds), cum_kicks = cummean(kicks), cum_handballs = cummean(handballs),
+         cum_disposals = cummean(disposals), cum_marks = cummean(marks), cum_bounces = cummean(bounces),
+         cum_tackles = cummean(tackles), cum_contested_possessions = cummean(contested_possessions),
+         cum_uncontested_possessions = cummean(uncontested_possessions),
+         cum_total_possessions = cummean(total_possessions), cum_inside_50s = cummean(inside_50s),
+         cum_marks_inside_50 = cummean(marks_inside_50),cum_contested_marks = cummean(contested_marks),
+         cum_hitouts = cummean(hitouts),
+         cum_one_percenters = cummean(one_percenters),
+         cum_disposal_efficiency = cummean(disposal_efficiency),
+         cum_clangers = cummean(clangers),
+         cum_frees_for = cummean(frees_for),
+         cum_frees_against = cummean(frees_against),
+         cum_dream_team_points = cummean(dream_team_points),
+         cum_rebound_50s = cummean(rebound_50s),
+         cum_goal_assists = cummean(goal_assists),
+         cum_goal_accuracy = cummean(goal_accuracy),
+         cum_rating_points = cummean(rating_points),
+         cum_turnovers = cummean(turnovers),
+         cum_intercepts = cummean(intercepts),
+         cum_tackles_inside_50 = cummean(tackles_inside_50),
+         cum_shots_at_goal = cummean(shots_at_goal),
+         cum_score_involvements = cummean(score_involvements),
+         cum_metres_gained = cummean(metres_gained),
+         cum_centre_clearances = cummean(centre_clearances),
+         cum_stoppage_clearances = cummean(stoppage_clearances),
+         cum_total_clearances = cummean(total_clearances),
+         cum_effective_kicks = cummean(effective_kicks),
+         cum_kick_efficiency = cummean(kick_efficiency),
+         cum_kick_to_handball_ratio = cummean(kick_to_handball_ratio),
+         cum_effective_disposals = cummean(effective_disposals),
+         cum_marks_on_lead = cummean(marks_on_lead),
+         cum_intercept_marks = cummean(intercept_marks),
+         cum_contested_possession_rate = cummean(contested_possession_rate),
+         cum_hitouts_to_advantage = cummean(hitouts_to_advantage),
+         cum_hitout_win_percentage = cummean(hitout_win_percentage),
+         cum_hitout_to_advantage_rate = cummean(hitout_to_advantage_rate),
+         cum_ground_ball_gets = cummean(ground_ball_gets),
+         cum_f50_ground_ball_gets = cummean(f50_ground_ball_gets),
+         cum_score_launches = cummean(score_launches),
+         cum_pressure_acts = cummean(pressure_acts),
+         cum_def_half_pressure_acts = cummean(def_half_pressure_acts),
+         cum_spoils = cummean(spoils),
+         cum_ruck_contests = cummean(ruck_contests),
+         cum_contest_def_one_on_ones = cummean(contest_def_one_on_ones),
+         cum_contest_def_losses = cummean(contest_def_losses),
+         cum_contest_def_loss_percentage = cummean(contest_def_loss_percentage),
+         cum_contest_off_one_on_ones = cummean(contest_off_one_on_ones),
+         cum_contest_off_wins = cummean(contest_off_wins),
+         cum_contest_off_wins_percentage = cummean(contest_off_wins_percentage),
+         cum_centre_bounce_attendances = cummean(centre_bounce_attendances),
+         cum_kickins = cummean(kickins),
+         cum_kickins_playon = cummean(kickins_playon)) %>% 
+  ungroup() 
+
+lagged_stats
+
+
+# bulldogs are labelled Footscray, this is swapped
+lagged_stats <- lagged_stats %>% 
+  mutate(across(where(is.character), ~replace(.x, .x %in% c("Footscray"), "Western Bulldogs")))
+
+# Separate lagged home stats
+hteam_lag <- lagged_stats %>% 
+  filter(teamStatus == 'home') %>% 
+  rename(hteam = team)
+
+# Separate lagged away stats
+ateam_lag <- lagged_stats %>% 
+  filter(teamStatus == 'away') %>% 
+  rename(ateam = team)
+
+# combine the home and away team stats with the fixture df
+final_df <- fixture_df %>% 
+  right_join(hteam_lag, by = c('round', 'hteam')) %>% 
+  right_join(ateam_lag, by = c('round', 'ateam'))
+
+final_df
+```
+
+```{r}
+write.csv(final_df, "final_df.csv", row.names = F)
+```
+
+```{r}
+# NOTE: Potentially go back and exclude players that haven't played a game yet. 
+
+# remove individual level data
+team_df <- subset(player_df, select = -c(player.player.position,
+                                         player.player.player.captain,
+                                         full.name))
+# summarise the individual data by taking the average of each of the stats
+hteam_df <- team_df %>%
+  filter(teamStatus == "home") %>% 
+  group_by(round, team.name, teamStatus) %>%
+  summarise( # ht = home team
+    ht_avg_time_on_ground = mean(timeOnGroundPercentage),
+    ht_goals = mean(goals), # average goals
+    ht_behinds = mean(behinds), # total behinds
+    ht_kicks = mean(kicks), 
+    ht_handballs = mean(handballs),
+    ht_avg_disposals = mean(disposals),
+    ht_avg_marks = mean(marks),
+    ht_avg_bounces = mean(bounces),
+    ht_avg_tackles = mean(tackles),
+    ht_avg_contested_possessions = mean(contestedPossessions),
+    ht_avg_uncontested_possessions = mean(uncontestedPossessions),
+    ht_avg_total_possessions = mean(totalPossessions),
+    ht_avg_inside_50s = mean(inside50s),
+    ht_avg_marks_inside_50 = mean(marksInside50),
+    ht_avg_contested_marks = mean(contestedMarks),
+    ht_avg_hitouts = mean(hitouts),
+    ht_avg_one_percenters = mean(onePercenters),
+    ht_avg_disposal_efficiency = mean(disposalEfficiency),
+    ht_avg_clangers = mean(clangers),
+    ht_avg_frees_for = mean(freesFor),
+    ht_avg_frees_against = mean(freesAgainst),
+    ht_avg_dream_team_points = mean(dreamTeamPoints),
+    ht_avg_rebound_50s = mean(rebound50s),
+    ht_avg_goal_assists = mean(goalAssists),
+    ht_avg_goal_accuracy = mean(goalAccuracy),
+    ht_avg_rating_points = mean(ratingPoints),
+    ht_avg_turnovers = mean(turnovers),
+    ht_avg_intercepts = mean(intercepts),
+    ht_avg_tackles_inside_50 = mean(tacklesInside50),
+    ht_avg_shots_at_goal = mean(shotsAtGoal),
+    ht_avg_score_involvements = mean(scoreInvolvements),
+    ht_avg_metres_gained = mean(metresGained),
+    ht_avg_centre_clearances = mean(clearances.centreClearances),
+    ht_avg_stoppage_clearances = mean(clearances.stoppageClearances),
+    ht_avg_total_clearances = mean(clearances.totalClearances),
+    ht_avg_effective_kicks = mean(extendedStats.effectiveKicks),
+    ht_avg_kick_efficiency = mean(extendedStats.kickEfficiency),
+    ht_avg_kick_to_handball_ratio = mean(extendedStats.kickToHandballRatio),
+    ht_avg_effective_disposals = mean(extendedStats.effectiveDisposals),
+    ht_avg_marks_on_lead = mean(extendedStats.marksOnLead),
+    ht_avg_intercept_marks = mean(extendedStats.interceptMarks),
+    ht_avg_contested_possession_rate = mean(extendedStats.contestedPossessionRate),
+    ht_avg_hitouts_to_advantage = mean(extendedStats.hitoutsToAdvantage),
+    ht_avg_hitout_win_percentage = mean(extendedStats.hitoutWinPercentage),
+    ht_avg_hitout_to_advantage_rate = mean(extendedStats.hitoutToAdvantageRate),
+    ht_avg_ground_ball_gets = mean(extendedStats.groundBallGets),
+    ht_avg_f50_ground_ball_gets = mean(extendedStats.f50GroundBallGets),
+    ht_avg_score_launches = mean(extendedStats.scoreLaunches),
+    ht_avg_pressure_acts = mean(extendedStats.pressureActs),
+    ht_avg_def_half_pressure_acts = mean(extendedStats.defHalfPressureActs),
+    ht_avg_spoils = mean(extendedStats.spoils),
+    ht_avg_ruck_contests = mean(extendedStats.ruckContests),
+    ht_avg_contest_def_one_on_ones = mean(extendedStats.contestDefOneOnOnes),
+    ht_avg_contest_def_losses = mean(extendedStats.contestDefLosses),
+    ht_avg_contest_def_loss_percentage = mean(extendedStats.contestDefLossPercentage),
+    ht_avg_contest_off_one_on_ones = mean(extendedStats.contestOffOneOnOnes),
+    ht_avg_contest_off_wins = mean(extendedStats.contestOffWins),
+    ht_avg_contest_off_wins_percentage = mean(extendedStats.contestOffWinsPercentage),
+    ht_avg_centre_bounce_attendances = mean(extendedStats.centreBounceAttendances),
+    ht_avg_kickins = mean(extendedStats.kickins),
+    ht_avg_kickins_playon = mean(extendedStats.kickinsPlayon)) %>% 
+  rename(ateam = team.name) # rename for joining
+
+hteam_df
+  
+```
+
+```{r}
+# I now need to figure out to get the data loaded for the previous round for each team. 
+final_df <- fixture_df %>% 
+  right_join(hteam_df, by = c('round', 'hteam')) %>% 
+  right_join(ateam_df, by = c('round', 'ateam'))
+
+# assign correct datatypes
+
+
+#final_df <- subset(final_df, select = -c(teamStatus.x, teamStatus.y))
+final_df
+```
+
+```{r}
+final_df %>% 
+  filter(hteam == "Richmond" | ateam == "Richmond")
+
+# hteam_df %>%
+#   group_by(hteam) %>%
+#   mutate(
+#     avg_ht_goals = rollapply(ht_goals, width = 3, FUN = mean, align = 'right', fill = NA)
+#     # Add similar lines for other statistics
+#   )
+```
+
+```{r}
+# Standardize data by creating a uniform structure for team and goals
+home_data <- final_df %>%
+  select(team = hteam, goals = hgoals, date) %>%
+  mutate(home_or_away = "home")
+
+away_data <- final_df %>%
+  select(team = ateam, goals = agoals, date) %>%
+  mutate(home_or_away = "away")
+
+# Combine home and away data
+combined_data <- bind_rows(home_data, away_data) %>%
+  arrange(team, date) # Ensure data is ordered by team and date for rolling calculation
+
+# Calculate rolling averages
+combined_data <- combined_data %>%
+  group_by(team) %>%
+  mutate(
+    avg_goals = rollapply(goals, width = 3, FUN = mean, align = 'right', fill = NA)
+  )
+```
+
+```{r}
+write.csv(final_df, "final_df.csv", row.names = F)
+```
+
+```{r}
+# seems to be potential poisson/right skew distibution for most of the metrics 
+summary(final_df$disposals)
+
+hist(final_df$marksInside50)
+```
+
+```{r}
+# remove individual level data
+team_df <- subset(player_df, select = -c(player.player.position,
+                                         player.player.player.captain,
+                                         full.name))
+
+# summarise the individual data by taking the average of each of the stats
+hteam_df <- team_df %>%
+  filter(teamStatus == "home") %>% 
+  group_by(round, team.name, teamStatus) %>%
+  summarise( # ht = home team
+    ht_avg_time_on_ground = mean(timeOnGroundPercentage),
+    ht_goals = sum(goals), # total goals
+    ht_behinds = sum(behinds), # total behinds
+    ht_kicks = sum(kicks), 
+    ht_handballs = sum(handballs),
+    ht_avg_disposals = mean(disposals),
+    ht_avg_marks = mean(marks),
+    ht_avg_bounces = mean(bounces),
+    ht_avg_tackles = mean(tackles),
+    ht_avg_contested_possessions = mean(contestedPossessions),
+    ht_avg_uncontested_possessions = mean(uncontestedPossessions),
+    ht_avg_total_possessions = mean(totalPossessions),
+    ht_avg_inside_50s = mean(inside50s),
+    ht_avg_marks_inside_50 = mean(marksInside50),
+    ht_avg_contested_marks = mean(contestedMarks),
+    ht_avg_hitouts = mean(hitouts),
+    ht_avg_one_percenters = mean(onePercenters),
+    ht_avg_disposal_efficiency = mean(disposalEfficiency),
+    ht_avg_clangers = mean(clangers),
+    ht_avg_frees_for = mean(freesFor),
+    ht_avg_frees_against = mean(freesAgainst),
+    ht_avg_dream_team_points = mean(dreamTeamPoints),
+    ht_avg_rebound_50s = mean(rebound50s),
+    ht_avg_goal_assists = mean(goalAssists),
+    ht_avg_goal_accuracy = mean(goalAccuracy),
+    ht_avg_rating_points = mean(ratingPoints),
+    ht_avg_turnovers = mean(turnovers),
+    ht_avg_intercepts = mean(intercepts),
+    ht_avg_tackles_inside_50 = mean(tacklesInside50),
+    ht_avg_shots_at_goal = mean(shotsAtGoal),
+    ht_avg_score_involvements = mean(scoreInvolvements),
+    ht_avg_metres_gained = mean(metresGained),
+    ht_avg_centre_clearances = mean(clearances.centreClearances),
+    ht_avg_stoppage_clearances = mean(clearances.stoppageClearances),
+    ht_avg_total_clearances = mean(clearances.totalClearances),
+    ht_avg_effective_kicks = mean(extendedStats.effectiveKicks),
+    ht_avg_kick_efficiency = mean(extendedStats.kickEfficiency),
+    ht_avg_kick_to_handball_ratio = mean(extendedStats.kickToHandballRatio),
+    ht_avg_effective_disposals = mean(extendedStats.effectiveDisposals),
+    ht_avg_marks_on_lead = mean(extendedStats.marksOnLead),
+    ht_avg_intercept_marks = mean(extendedStats.interceptMarks),
+    ht_avg_contested_possession_rate = mean(extendedStats.contestedPossessionRate),
+    ht_avg_hitouts_to_advantage = mean(extendedStats.hitoutsToAdvantage),
+    ht_avg_hitout_win_percentage = mean(extendedStats.hitoutWinPercentage),
+    ht_avg_hitout_to_advantage_rate = mean(extendedStats.hitoutToAdvantageRate),
+    ht_avg_ground_ball_gets = mean(extendedStats.groundBallGets),
+    ht_avg_f50_ground_ball_gets = mean(extendedStats.f50GroundBallGets),
+    ht_avg_score_launches = mean(extendedStats.scoreLaunches),
+    ht_avg_pressure_acts = mean(extendedStats.pressureActs),
+    ht_avg_def_half_pressure_acts = mean(extendedStats.defHalfPressureActs),
+    ht_avg_spoils = mean(extendedStats.spoils),
+    ht_avg_ruck_contests = mean(extendedStats.ruckContests),
+    ht_avg_contest_def_one_on_ones = mean(extendedStats.contestDefOneOnOnes),
+    ht_avg_contest_def_losses = mean(extendedStats.contestDefLosses),
+    ht_avg_contest_def_loss_percentage = mean(extendedStats.contestDefLossPercentage),
+    ht_avg_contest_off_one_on_ones = mean(extendedStats.contestOffOneOnOnes),
+    ht_avg_contest_off_wins = mean(extendedStats.contestOffWins),
+    ht_avg_contest_off_wins_percentage = mean(extendedStats.contestOffWinsPercentage),
+    ht_avg_centre_bounce_attendances = mean(extendedStats.centreBounceAttendances),
+    ht_avg_kickins = mean(extendedStats.kickins),
+    ht_avg_kickins_playon = mean(extendedStats.kickinsPlayon)) %>% 
+  rename(hteam = team.name) # rename for joining
+
+ateam_df <- team_df %>%
+  filter(teamStatus == "away") %>% 
+  group_by(round, team.name, teamStatus) %>%
+  summarise( # at = away team
+    at_avg_time_on_ground = mean(timeOnGroundPercentage),
+    at_goals = sum(goals),
+    at_behinds = sum(behinds),
+    at_kicks = sum(kicks),
+    at_handballs = sum(handballs),
+    at_avg_disposals = mean(disposals),
+    at_avg_marks = mean(marks),
+    at_avg_bounces = mean(bounces),
+    at_avg_tackles = mean(tackles),
+    at_avg_contested_possessions = mean(contestedPossessions),
+    at_avg_uncontested_possessions = mean(uncontestedPossessions),
+    at_avg_total_possessions = mean(totalPossessions),
+    at_avg_inside_50s = mean(inside50s),
+    at_avg_marks_inside_50 = mean(marksInside50),
+    at_avg_contested_marks = mean(contestedMarks),
+    at_avg_hitouts = mean(hitouts),
+    at_avg_one_percenters = mean(onePercenters),
+    at_avg_disposal_efficiency = mean(disposalEfficiency),
+    at_avg_clangers = mean(clangers),
+    at_avg_frees_for = mean(freesFor),
+    at_avg_frees_against = mean(freesAgainst),
+    at_avg_dream_team_points = mean(dreamTeamPoints),
+    at_avg_rebound_50s = mean(rebound50s),
+    at_avg_goal_assists = mean(goalAssists),
+    at_avg_goal_accuracy = mean(goalAccuracy),
+    at_avg_rating_points = mean(ratingPoints),
+    at_avg_turnovers = mean(turnovers),
+    at_avg_intercepts = mean(intercepts),
+    at_avg_tackles_inside_50 = mean(tacklesInside50),
+    at_avg_shots_at_goal = mean(shotsAtGoal),
+    at_avg_score_involvements = mean(scoreInvolvements),
+    at_avg_metres_gained = mean(metresGained),
+    at_avg_centre_clearances = mean(clearances.centreClearances),
+    at_avg_stoppage_clearances = mean(clearances.stoppageClearances),
+    at_avg_total_clearances = mean(clearances.totalClearances),
+    at_avg_effective_kicks = mean(extendedStats.effectiveKicks),
+    at_avg_kick_efficiency = mean(extendedStats.kickEfficiency),
+    at_avg_kick_to_handball_ratio = mean(extendedStats.kickToHandballRatio),
+    at_avg_effective_disposals = mean(extendedStats.effectiveDisposals),
+    at_avg_marks_on_lead = mean(extendedStats.marksOnLead),
+    at_avg_intercept_marks = mean(extendedStats.interceptMarks),
+    at_avg_contested_possession_rate = mean(extendedStats.contestedPossessionRate),
+    at_avg_hitouts_to_advantage = mean(extendedStats.hitoutsToAdvantage),
+    at_avg_hitout_win_percentage = mean(extendedStats.hitoutWinPercentage),
+    at_avg_hitout_to_advantage_rate = mean(extendedStats.hitoutToAdvantageRate),
+    at_avg_ground_ball_gets = mean(extendedStats.groundBallGets),
+    at_avg_f50_ground_ball_gets = mean(extendedStats.f50GroundBallGets),
+    at_avg_score_launches = mean(extendedStats.scoreLaunches),
+    at_avg_pressure_acts = mean(extendedStats.pressureActs),
+    at_avg_def_half_pressure_acts = mean(extendedStats.defHalfPressureActs),
+    at_avg_spoils = mean(extendedStats.spoils),
+    at_avg_ruck_contests = mean(extendedStats.ruckContests),
+    at_avg_contest_def_one_on_ones = mean(extendedStats.contestDefOneOnOnes),
+    at_avg_contest_def_losses = mean(extendedStats.contestDefLosses),
+    at_avg_contest_def_loss_percentage = mean(extendedStats.contestDefLossPercentage),
+    at_avg_contest_off_one_on_ones = mean(extendedStats.contestOffOneOnOnes),
+    at_avg_contest_off_wins = mean(extendedStats.contestOffWins),
+    at_avg_contest_off_wins_percentage = mean(extendedStats.contestOffWinsPercentage),
+    at_avg_centre_bounce_attendances = mean(extendedStats.centreBounceAttendances),
+    at_avg_kickins = mean(extendedStats.kickins),
+    at_avg_kickins_playon = mean(extendedStats.kickinsPlayon)) %>% 
+  rename(ateam = team.name) # rename for joining
+
+# # # get whether or not the team won into the team stats dataframes
+# home_win_df <- subset(fixture_df, select = c(round, hteam, home_win))
+# away_win_df <- subset(fixture_df, select = c(round, ateam, away_win))
+# 
+# #
+# hteam_df <- hteam_df %>%
+#   right_join(home_win_df, by = c('round', 'hteam'))
+# 
+# ateam_df <- ateam_df %>%
+#   right_join(away_win_df, by = c('round', 'ateam'))
+
+
+hteam_df
+ateam_df
+```---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code.
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*.
+
+```{r}
+library(fitzRoy)
+library(dplyr)
+library(jsonlite)
+library(lubridate)
+library(visdat)
+```
+
+```{r}
+# run script in terminal to perform preprocessing of info to be sent into python
+
+preprocess_fixture <- function(fixture) {
+    # create new column for each state.
+    fixture_clean <- fixture %>% mutate(region = case_when(
+        venue %in% c('Adelaide Hills', 'Adelaide Oval', 'Norwood Oval', 'Football Park') ~ "SA",
+        venue %in% c('M.C.G.', 'Docklands', 'Eureka Stadium', 'Kardinia Park', 'Marvel Stadium',
+                     'GMHBA Stadium', 'Mars Stadium') ~ "VIC",
+        venue %in% c('Carrara', 'Gabba', "Cazaly's Stadium", "Riverway Stadium") ~ "QLD",
+        venue %in% c('S.C.G.', 'Sydney Showground', 'Stadium Australia', 'Blacktown') ~ "NSW",
+        venue %in% c('Marrara Oval', 'Traeger Park') ~ 'NT',
+        venue %in% c('Bellerive Oval', 'York Park', 'University of Tasmania Stadium') ~ "TAS",
+        venue %in% c('Manuka Oval', 'UNSW Canberra Oval') ~ 'ACT',
+        venue %in% c('Perth Stadium', 'Optus Stadium', 'Subiaco') ~ 'WA',
+        venue %in% c('Jiangwan Stadium', 'Adelaide Arena at Jiangwan Stadium') ~ 'CHN',
+        venue %in% c('Wellington') ~ 'NZL',
+        TRUE ~ NA_character_  # set NA for all other observations
+    ))
+
+    
+    fixture_clean$date <- as.Date(fixture_clean$localtime)
+    fixture_clean$time <- format(ymd_hms(fixture_clean$localtime), "%H:%M:%S")
+    fixture_clean$home_win <- ifelse(fixture_clean$hscore > fixture_clean$ascore, 1, 0) 
+    fixture_clean$away_win <- ifelse(fixture_clean$hscore < fixture_clean$ascore, 1, 0)
+    fixture_clean$hdiff <- fixture_clean$hscore - fixture_clean$ascore
+    
+    # select specific rows
+    fixture_clean <- select(fixture_clean, year, round, date, time, region, venue, hteam, ateam, hscore, ascore,
+    hdiff, is_grand_final, is_final, home_win, away_win, id)
+    
+    return(fixture_clean)
+}
+```
+
+```{r}
+# get the individual player data
+player_stats = fetch_player_stats_afl(season = 2023)
+```
+
+```{r}
+fixture_23 <- fetch_fixture_squiggle(2023)
+```
+
+```{r}
+fixture_df <- preprocess_fixture(fixture_23)
+fixture_df
+```
+
+```{r}
+results_afl_2023 = fetch_results_afl(season = 2023) # state and weather data
+```
+
+```{r}
+# check if any NA values are present
+any(is.na(player_stats))
+```
+
+```{r}
+# remove useless columns
+player_df <- subset(player_stats, 
+                    select = c(-home.team.name, # home.team.club.name used instead due to indigenous round naming
+                               -away.team.name,
+                               -player.photoURL,
+                               -gamesPlayed, # these cols are all missing all values
+                               -superGoals,
+                               -ranking,
+                               -lastUpdated,
+                               -goalEfficiency,
+                               -shotEfficiency,
+                               -interchangeCounts)) 
+
+# Establish universal team names across character data
+player_df <- player_df %>%
+  # rename columns
+  rename(c(round = round.roundNumber,hteam = home.team.club.name, ateam = away.team.club.name)) %>% 
+  # Establish universal team names across character data
+  mutate(across(where(is.character), ~replace(.x, .x %in% c("Geelong Cats"), "Geelong"))) %>% 
+  mutate(across(where(is.character), ~replace(.x, .x %in% c("West Coast Eagles", "Waalitj Marawar"), "West Coast"))) %>% 
+  mutate(across(where(is.character), ~replace(.x, .x %in% c("Gold Coast SUNS"), "Gold Coast"))) %>% 
+  mutate(across(where(is.character), ~replace(.x, .x %in% c("Sydney Swans"), "Sydney"))) %>% 
+  mutate(across(where(is.character), ~replace(.x, .x %in% c("GWS GIANTS"), "Greater Western Sydney"))) %>%
+  mutate(across(where(is.character), ~replace(.x, .x %in% c("Adelaide Crows", "Kuwarna"), "Adelaide"))) %>% 
+  mutate(across(where(is.character), ~replace(.x, .x %in% c("Yartapuulti"), "Port Adelaide"))) %>% 
+  mutate(across(where(is.character), ~replace(.x, .x %in% c("Narrm"), "Melbourne"))) %>% 
+  mutate(across(where(is.character), ~replace(.x, .x %in% c("Euro-Yroke"), "St Kilda"))) %>% 
+  mutate(across(where(is.character), ~replace(.x, .x %in% c("Walyalup"), "Fremantle"))) %>% 
+  # set column for the full player name
+  mutate(full.name = paste(player.player.player.givenName, player.player.player.surname, sep = " "))
+
+# remove rows not neccessary
+player_df <- subset(player_df, select = -c(providerId, 
+                                          utcStartTime,
+                                          status,
+                                          compSeason.shortName,
+                                          round.name,
+                                          player.player.player.playerId,
+                                          player.player.player.playerJumperNumber,
+                                          teamId,
+                                          player.playerId,
+                                          player.playerJumperNumber,
+                                          player.givenName,
+                                          player.surname,
+                                          player.captain,
+                                          player.jumperNumber,
+                                          player.player.player.givenName,
+                                          player.player.player.surname))
+
+player_df
+```
+
+```{r}
+# remove individual level data
+team_df <- subset(player_df, select = -c(player.player.position,
+                                         player.player.player.captain,
+                                         full.name))
+
+# summarise the individual data by taking the average of each of the stats
+hteam_df <- team_df %>%
+  filter(teamStatus == "home") %>% 
+  group_by(round, team.name, teamStatus) %>%
+  summarise( # ht = home team
+    ht_avg_time_on_ground = mean(timeOnGroundPercentage),
+    ht_goals = sum(goals), # total goals
+    ht_behinds = sum(behinds), # total behinds
+    ht_kicks = sum(kicks), 
+    ht_handballs = sum(handballs),
+    ht_disposals = sum(disposals)) %>% 
+  rename(hteam = team.name) # %>%  # rename for joining
+
+ateam_df <- team_df %>%
+  filter(teamStatus == "away") %>% 
+  group_by(round, team.name, teamStatus) %>%
+  summarise( # at = away team
+    at_avg_time_on_ground = mean(timeOnGroundPercentage),
+    at_goals = sum(goals),
+    at_behinds = sum(behinds),
+    at_kicks = sum(kicks),
+    at_handballs = sum(handballs),
+    at_disposals = sum(disposals)) %>% 
+  rename(ateam = team.name) #%>%  # rename for joining
+
+hteam_df
+ateam_df
+
+final_df <- fixture_df %>% 
+  right_join(hteam_df, by = c('round', 'hteam')) %>% 
+  right_join(ateam_df, by = c('round', 'ateam'))
+
+final_df
+```
+
+```{r}
+# CURRENT CELL WORKING ON
+
+# remove individual level data
+team_df <- subset(player_df, select = -c(player.player.position,
+                                         player.player.player.captain,
+                                         full.name))
+
+# summarise the individual data by taking the average of each of the stats
+hteam_df <- team_df %>%
+  filter(teamStatus == "home") %>% 
+  group_by(round, team.name, teamStatus) %>%
+  summarise( # ht = home team
+    avg_time_on_ground = mean(timeOnGroundPercentage), # mean
+    goals = sum(goals), 
+    behinds = sum(behinds), 
+    kicks = sum(kicks), 
+    handballs = sum(handballs),
+    disposals = sum(disposals),
+    marks = sum(marks),
+    bounces = sum(bounces),
+    tackles = sum(tackles),
+    contested_possessions = sum(contestedPossessions),
+    uncontested_possessions = sum(uncontestedPossessions),
+    total_possessions = sum(totalPossessions),
+    inside_50s = sum(inside50s),
+    marks_inside_50 = sum(marksInside50),
+    contested_marks = sum(contestedMarks),
+    hitouts = sum(hitouts),
+    one_percenters = sum(onePercenters),
+    disposal_efficiency = mean(disposalEfficiency), # mean
+    clangers = sum(clangers),
+    frees_for = sum(freesFor),
+    frees_against = sum(freesAgainst),
+    dream_team_points = sum(dreamTeamPoints),
+    rebound_50s = sum(rebound50s),
+    goal_assists = sum(goalAssists),
+    goal_accuracy = mean(goalAccuracy), # mean
+    rating_points = sum(ratingPoints),
+    turnovers = sum(turnovers), 
+    intercepts = sum(intercepts),
+    tackles_inside_50 = sum(tacklesInside50),
+    shots_at_goal = sum(shotsAtGoal),
+    score_involvements = sum(scoreInvolvements),
+    metres_gained = sum(metresGained),
+    centre_clearances = sum(clearances.centreClearances),
+    stoppage_clearances = sum(clearances.stoppageClearances),
+    total_clearances = sum(clearances.totalClearances),
+    effective_kicks = sum(extendedStats.effectiveKicks),
+    kick_efficiency = mean(extendedStats.kickEfficiency), # mean
+    kick_to_handball_ratio = mean(extendedStats.kickToHandballRatio), # mean
+    effective_disposals = sum(extendedStats.effectiveDisposals),
+    marks_on_lead = sum(extendedStats.marksOnLead),
+    intercept_marks = sum(extendedStats.interceptMarks),
+    contested_possession_rate = mean(extendedStats.contestedPossessionRate), # mean
+    hitouts_to_advantage = sum(extendedStats.hitoutsToAdvantage),
+    hitout_win_percentage = mean(extendedStats.hitoutWinPercentage), # mean
+    hitout_to_advantage_rate = mean(extendedStats.hitoutToAdvantageRate), # mean
+    ground_ball_gets = sum(extendedStats.groundBallGets),
+    f50_ground_ball_gets = sum(extendedStats.f50GroundBallGets),
+    score_launches = sum(extendedStats.scoreLaunches),
+    pressure_acts = sum(extendedStats.pressureActs),
+    def_half_pressure_acts = sum(extendedStats.defHalfPressureActs),
+    spoils = sum(extendedStats.spoils),
+    ruck_contests = sum(extendedStats.ruckContests),
+    contest_def_one_on_ones = sum(extendedStats.contestDefOneOnOnes),
+    contest_def_losses = sum(extendedStats.contestDefLosses),
+    contest_def_loss_percentage = mean(extendedStats.contestDefLossPercentage), # mean
+    contest_off_one_on_ones = sum(extendedStats.contestOffOneOnOnes),
+    contest_off_wins = sum(extendedStats.contestOffWins),
+    contest_off_wins_percentage = mean(extendedStats.contestOffWinsPercentage), # mean
+    centre_bounce_attendances = sum(extendedStats.centreBounceAttendances),
+    kickins = sum(extendedStats.kickins),
+    kickins_playon = sum(extendedStats.kickinsPlayon)) %>% 
+  rename(team = team.name) # %>%  # rename for joining
+
+ateam_df <- team_df %>%
+  filter(teamStatus == "away") %>% 
+  group_by(round, team.name, teamStatus) %>%
+  summarise( # at = away team
+    avg_time_on_ground = mean(timeOnGroundPercentage),
+    goals = sum(goals), # average goals
+    behinds = sum(behinds), # total behinds
+    kicks = sum(kicks), 
+    handballs = sum(handballs),
+    disposals = sum(disposals),
+    marks = sum(marks),
+    bounces = sum(bounces),
+    tackles = sum(tackles),
+    contested_possessions = sum(contestedPossessions),
+    uncontested_possessions = sum(uncontestedPossessions),
+    total_possessions = sum(totalPossessions),
+    inside_50s = sum(inside50s),
+    marks_inside_50 = sum(marksInside50),
+    contested_marks = sum(contestedMarks),
+    hitouts = sum(hitouts),
+    one_percenters = sum(onePercenters),
+    disposal_efficiency = mean(disposalEfficiency), # mean
+    clangers = sum(clangers),
+    frees_for = sum(freesFor),
+    frees_against = sum(freesAgainst),
+    dream_team_points = sum(dreamTeamPoints),
+    rebound_50s = sum(rebound50s),
+    goal_assists = sum(goalAssists),
+    goal_accuracy = mean(goalAccuracy), # mean
+    rating_points = sum(ratingPoints),
+    turnovers = sum(turnovers),
+    intercepts = sum(intercepts),
+    tackles_inside_50 = sum(tacklesInside50),
+    shots_at_goal = sum(shotsAtGoal),
+    score_involvements = sum(scoreInvolvements),
+    metres_gained = sum(metresGained),
+    centre_clearances = sum(clearances.centreClearances),
+    stoppage_clearances = sum(clearances.stoppageClearances),
+    total_clearances = sum(clearances.totalClearances),
+    effective_kicks = sum(extendedStats.effectiveKicks),
+    kick_efficiency = mean(extendedStats.kickEfficiency), # mean
+    kick_to_handball_ratio = mean(extendedStats.kickToHandballRatio), # mean
+    effective_disposals = sum(extendedStats.effectiveDisposals),
+    marks_on_lead = sum(extendedStats.marksOnLead),
+    intercept_marks = sum(extendedStats.interceptMarks),
+    contested_possession_rate = mean(extendedStats.contestedPossessionRate), #mean
+    hitouts_to_advantage = sum(extendedStats.hitoutsToAdvantage),
+    hitout_win_percentage = mean(extendedStats.hitoutWinPercentage), # mean
+    hitout_to_advantage_rate = mean(extendedStats.hitoutToAdvantageRate), # mean
+    ground_ball_gets = sum(extendedStats.groundBallGets),
+    f50_ground_ball_gets = sum(extendedStats.f50GroundBallGets),
+    score_launches = sum(extendedStats.scoreLaunches),
+    pressure_acts = sum(extendedStats.pressureActs),
+    def_half_pressure_acts = sum(extendedStats.defHalfPressureActs),
+    spoils = sum(extendedStats.spoils),
+    ruck_contests = sum(extendedStats.ruckContests),
+    contest_def_one_on_ones = sum(extendedStats.contestDefOneOnOnes),
+    contest_def_losses = sum(extendedStats.contestDefLosses),
+    contest_def_loss_percentage = mean(extendedStats.contestDefLossPercentage), # mean
+    contest_off_one_on_ones = sum(extendedStats.contestOffOneOnOnes),
+    contest_off_wins = sum(extendedStats.contestOffWins),
+    contest_off_wins_percentage = mean(extendedStats.contestOffWinsPercentage), # mean
+    centre_bounce_attendances = sum(extendedStats.centreBounceAttendances),
+    kickins = sum(extendedStats.kickins),
+    kickins_playon = sum(extendedStats.kickinsPlayon)) %>% 
+  rename(team = team.name) #%>%  # rename for joining
+
+# combine statistics of home and away teams
+combined_stats <- bind_rows(hteam_df, ateam_df)
+
+# lag each combined stat for each team by one round
+lagged_stats <- combined_stats %>%
+  group_by(team) %>%
+  arrange(team, round) %>% # code below lags features
+  mutate(across(starts_with(c("avg_time_on_ground","goals", "behinds", "kicks", 
+                              "handballs", "disposals", "marks", "bounces", "tackles", 
+                              "contested_possessions", "uncontested_possessions", "total_possessions",
+                              "inside_50s", "marks_inside_50", "contested_marks", "hitouts", 
+                              "one_percenters", "disposal_efficiency", "clangers", "frees_for",
+                              "frees_against", "dream_team_points", "rebound_50s", "goal_assists",
+                              "goal_accuracy", "rating_points", "turnovers", "intercepts", "tackles_inside_50",
+                              "shots_at_goal", "score_involvements", "metres_gained", "centre_clearances",
+                              "stoppage_clearances", "total_clearances", "effective_kicks", "kick_efficiency",
+                              "kick_to_handball_ratio", "effective_disposals", "marks_on_lead", "intercept_marks",
+                              "contested_possession_rate", "hitouts_to_advantage", "hitout_win_percentage",
+                              "hitout_to_advantage_rate", "ground_ball_gets", "f50_ground_ball_gets", "score_launches",
+                              "pressure_acts", "def_half_pressure_acts", "spoils", "ruck_contests", 
+                              "contest_def_one_on_ones", "contest_def_losses", "contest_def_loss_percentage", 
+                              "contest_off_one_on_ones", "contest_off_wins", "contest_off_wins_percentage",
+                              "centre_bounce_attendances", "kickins", "kickins_playon")), lag)) %>% 
+  mutate_all(~replace(., is.na(.), 0)) %>% # replace NA values with zero 
+  # add cumulative statistics for the round
+  mutate(cum_avg_time_on_ground = cummean(avg_time_on_ground), cum_goals = cummean(goals),
+         cum_behinds = cummean(behinds), cum_kicks = cummean(kicks), cum_handballs = cummean(handballs),
+         cum_disposals = cummean(disposals), cum_marks = cummean(marks), cum_bounces = cummean(bounces),
+         cum_tackles = cummean(tackles), cum_contested_possessions = cummean(contested_possessions),
+         cum_uncontested_possessions = cummean(uncontested_possessions),
+         cum_total_possessions = cummean(total_possessions), cum_inside_50s = cummean(inside_50s),
+         cum_marks_inside_50 = cummean(marks_inside_50),cum_contested_marks = cummean(contested_marks),
+         cum_hitouts = cummean(hitouts),
+         cum_one_percenters = cummean(one_percenters),
+         cum_disposal_efficiency = cummean(disposal_efficiency),
+         cum_clangers = cummean(clangers),
+         cum_frees_for = cummean(frees_for),
+         cum_frees_against = cummean(frees_against),
+         cum_dream_team_points = cummean(dream_team_points),
+         cum_rebound_50s = cummean(rebound_50s),
+         cum_goal_assists = cummean(goal_assists),
+         cum_goal_accuracy = cummean(goal_accuracy),
+         cum_rating_points = cummean(rating_points),
+         cum_turnovers = cummean(turnovers),
+         cum_intercepts = cummean(intercepts),
+         cum_tackles_inside_50 = cummean(tackles_inside_50),
+         cum_shots_at_goal = cummean(shots_at_goal),
+         cum_score_involvements = cummean(score_involvements),
+         cum_metres_gained = cummean(metres_gained),
+         cum_centre_clearances = cummean(centre_clearances),
+         cum_stoppage_clearances = cummean(stoppage_clearances),
+         cum_total_clearances = cummean(total_clearances),
+         cum_effective_kicks = cummean(effective_kicks),
+         cum_kick_efficiency = cummean(kick_efficiency),
+         cum_kick_to_handball_ratio = cummean(kick_to_handball_ratio),
+         cum_effective_disposals = cummean(effective_disposals),
+         cum_marks_on_lead = cummean(marks_on_lead),
+         cum_intercept_marks = cummean(intercept_marks),
+         cum_contested_possession_rate = cummean(contested_possession_rate),
+         cum_hitouts_to_advantage = cummean(hitouts_to_advantage),
+         cum_hitout_win_percentage = cummean(hitout_win_percentage),
+         cum_hitout_to_advantage_rate = cummean(hitout_to_advantage_rate),
+         cum_ground_ball_gets = cummean(ground_ball_gets),
+         cum_f50_ground_ball_gets = cummean(f50_ground_ball_gets),
+         cum_score_launches = cummean(score_launches),
+         cum_pressure_acts = cummean(pressure_acts),
+         cum_def_half_pressure_acts = cummean(def_half_pressure_acts),
+         cum_spoils = cummean(spoils),
+         cum_ruck_contests = cummean(ruck_contests),
+         cum_contest_def_one_on_ones = cummean(contest_def_one_on_ones),
+         cum_contest_def_losses = cummean(contest_def_losses),
+         cum_contest_def_loss_percentage = cummean(contest_def_loss_percentage),
+         cum_contest_off_one_on_ones = cummean(contest_off_one_on_ones),
+         cum_contest_off_wins = cummean(contest_off_wins),
+         cum_contest_off_wins_percentage = cummean(contest_off_wins_percentage),
+         cum_centre_bounce_attendances = cummean(centre_bounce_attendances),
+         cum_kickins = cummean(kickins),
+         cum_kickins_playon = cummean(kickins_playon)) %>% 
+  ungroup() 
+
+lagged_stats
+
+
+# bulldogs are labelled Footscray, this is swapped
+lagged_stats <- lagged_stats %>% 
+  mutate(across(where(is.character), ~replace(.x, .x %in% c("Footscray"), "Western Bulldogs")))
+
+# Separate lagged home stats
+hteam_lag <- lagged_stats %>% 
+  filter(teamStatus == 'home') %>% 
+  rename(hteam = team)
+
+# Separate lagged away stats
+ateam_lag <- lagged_stats %>% 
+  filter(teamStatus == 'away') %>% 
+  rename(ateam = team)
+
+# combine the home and away team stats with the fixture df
+final_df <- fixture_df %>% 
+  right_join(hteam_lag, by = c('round', 'hteam')) %>% 
+  right_join(ateam_lag, by = c('round', 'ateam'))
+
+final_df
+```
+
+```{r}
+write.csv(final_df, "final_df.csv", row.names = F)
+```
+
+```{r}
+# NOTE: Potentially go back and exclude players that haven't played a game yet. 
+
+# remove individual level data
+team_df <- subset(player_df, select = -c(player.player.position,
+                                         player.player.player.captain,
+                                         full.name))
+# summarise the individual data by taking the average of each of the stats
+hteam_df <- team_df %>%
+  filter(teamStatus == "home") %>% 
+  group_by(round, team.name, teamStatus) %>%
+  summarise( # ht = home team
+    ht_avg_time_on_ground = mean(timeOnGroundPercentage),
+    ht_goals = mean(goals), # average goals
+    ht_behinds = mean(behinds), # total behinds
+    ht_kicks = mean(kicks), 
+    ht_handballs = mean(handballs),
+    ht_avg_disposals = mean(disposals),
+    ht_avg_marks = mean(marks),
+    ht_avg_bounces = mean(bounces),
+    ht_avg_tackles = mean(tackles),
+    ht_avg_contested_possessions = mean(contestedPossessions),
+    ht_avg_uncontested_possessions = mean(uncontestedPossessions),
+    ht_avg_total_possessions = mean(totalPossessions),
+    ht_avg_inside_50s = mean(inside50s),
+    ht_avg_marks_inside_50 = mean(marksInside50),
+    ht_avg_contested_marks = mean(contestedMarks),
+    ht_avg_hitouts = mean(hitouts),
+    ht_avg_one_percenters = mean(onePercenters),
+    ht_avg_disposal_efficiency = mean(disposalEfficiency),
+    ht_avg_clangers = mean(clangers),
+    ht_avg_frees_for = mean(freesFor),
+    ht_avg_frees_against = mean(freesAgainst),
+    ht_avg_dream_team_points = mean(dreamTeamPoints),
+    ht_avg_rebound_50s = mean(rebound50s),
+    ht_avg_goal_assists = mean(goalAssists),
+    ht_avg_goal_accuracy = mean(goalAccuracy),
+    ht_avg_rating_points = mean(ratingPoints),
+    ht_avg_turnovers = mean(turnovers),
+    ht_avg_intercepts = mean(intercepts),
+    ht_avg_tackles_inside_50 = mean(tacklesInside50),
+    ht_avg_shots_at_goal = mean(shotsAtGoal),
+    ht_avg_score_involvements = mean(scoreInvolvements),
+    ht_avg_metres_gained = mean(metresGained),
+    ht_avg_centre_clearances = mean(clearances.centreClearances),
+    ht_avg_stoppage_clearances = mean(clearances.stoppageClearances),
+    ht_avg_total_clearances = mean(clearances.totalClearances),
+    ht_avg_effective_kicks = mean(extendedStats.effectiveKicks),
+    ht_avg_kick_efficiency = mean(extendedStats.kickEfficiency),
+    ht_avg_kick_to_handball_ratio = mean(extendedStats.kickToHandballRatio),
+    ht_avg_effective_disposals = mean(extendedStats.effectiveDisposals),
+    ht_avg_marks_on_lead = mean(extendedStats.marksOnLead),
+    ht_avg_intercept_marks = mean(extendedStats.interceptMarks),
+    ht_avg_contested_possession_rate = mean(extendedStats.contestedPossessionRate),
+    ht_avg_hitouts_to_advantage = mean(extendedStats.hitoutsToAdvantage),
+    ht_avg_hitout_win_percentage = mean(extendedStats.hitoutWinPercentage),
+    ht_avg_hitout_to_advantage_rate = mean(extendedStats.hitoutToAdvantageRate),
+    ht_avg_ground_ball_gets = mean(extendedStats.groundBallGets),
+    ht_avg_f50_ground_ball_gets = mean(extendedStats.f50GroundBallGets),
+    ht_avg_score_launches = mean(extendedStats.scoreLaunches),
+    ht_avg_pressure_acts = mean(extendedStats.pressureActs),
+    ht_avg_def_half_pressure_acts = mean(extendedStats.defHalfPressureActs),
+    ht_avg_spoils = mean(extendedStats.spoils),
+    ht_avg_ruck_contests = mean(extendedStats.ruckContests),
+    ht_avg_contest_def_one_on_ones = mean(extendedStats.contestDefOneOnOnes),
+    ht_avg_contest_def_losses = mean(extendedStats.contestDefLosses),
+    ht_avg_contest_def_loss_percentage = mean(extendedStats.contestDefLossPercentage),
+    ht_avg_contest_off_one_on_ones = mean(extendedStats.contestOffOneOnOnes),
+    ht_avg_contest_off_wins = mean(extendedStats.contestOffWins),
+    ht_avg_contest_off_wins_percentage = mean(extendedStats.contestOffWinsPercentage),
+    ht_avg_centre_bounce_attendances = mean(extendedStats.centreBounceAttendances),
+    ht_avg_kickins = mean(extendedStats.kickins),
+    ht_avg_kickins_playon = mean(extendedStats.kickinsPlayon)) %>% 
+  rename(ateam = team.name) # rename for joining
+
+hteam_df
+  
+```
+
+```{r}
+# I now need to figure out to get the data loaded for the previous round for each team. 
+final_df <- fixture_df %>% 
+  right_join(hteam_df, by = c('round', 'hteam')) %>% 
+  right_join(ateam_df, by = c('round', 'ateam'))
+
+# assign correct datatypes
+
+
+#final_df <- subset(final_df, select = -c(teamStatus.x, teamStatus.y))
+final_df
+```
+
+```{r}
+final_df %>% 
+  filter(hteam == "Richmond" | ateam == "Richmond")
+
+# hteam_df %>%
+#   group_by(hteam) %>%
+#   mutate(
+#     avg_ht_goals = rollapply(ht_goals, width = 3, FUN = mean, align = 'right', fill = NA)
+#     # Add similar lines for other statistics
+#   )
+```
+
+```{r}
+# Standardize data by creating a uniform structure for team and goals
+home_data <- final_df %>%
+  select(team = hteam, goals = hgoals, date) %>%
+  mutate(home_or_away = "home")
+
+away_data <- final_df %>%
+  select(team = ateam, goals = agoals, date) %>%
+  mutate(home_or_away = "away")
+
+# Combine home and away data
+combined_data <- bind_rows(home_data, away_data) %>%
+  arrange(team, date) # Ensure data is ordered by team and date for rolling calculation
+
+# Calculate rolling averages
+combined_data <- combined_data %>%
+  group_by(team) %>%
+  mutate(
+    avg_goals = rollapply(goals, width = 3, FUN = mean, align = 'right', fill = NA)
+  )
+```
+
+```{r}
+write.csv(final_df, "final_df.csv", row.names = F)
+```
+
+```{r}
+# seems to be potential poisson/right skew distibution for most of the metrics 
+summary(final_df$disposals)
+
+hist(final_df$marksInside50)
+```
+
+```{r}
+# remove individual level data
+team_df <- subset(player_df, select = -c(player.player.position,
+                                         player.player.player.captain,
+                                         full.name))
+
+# summarise the individual data by taking the average of each of the stats
+hteam_df <- team_df %>%
+  filter(teamStatus == "home") %>% 
+  group_by(round, team.name, teamStatus) %>%
+  summarise( # ht = home team
+    ht_avg_time_on_ground = mean(timeOnGroundPercentage),
+    ht_goals = sum(goals), # total goals
+    ht_behinds = sum(behinds), # total behinds
+    ht_kicks = sum(kicks), 
+    ht_handballs = sum(handballs),
+    ht_avg_disposals = mean(disposals),
+    ht_avg_marks = mean(marks),
+    ht_avg_bounces = mean(bounces),
+    ht_avg_tackles = mean(tackles),
+    ht_avg_contested_possessions = mean(contestedPossessions),
+    ht_avg_uncontested_possessions = mean(uncontestedPossessions),
+    ht_avg_total_possessions = mean(totalPossessions),
+    ht_avg_inside_50s = mean(inside50s),
+    ht_avg_marks_inside_50 = mean(marksInside50),
+    ht_avg_contested_marks = mean(contestedMarks),
+    ht_avg_hitouts = mean(hitouts),
+    ht_avg_one_percenters = mean(onePercenters),
+    ht_avg_disposal_efficiency = mean(disposalEfficiency),
+    ht_avg_clangers = mean(clangers),
+    ht_avg_frees_for = mean(freesFor),
+    ht_avg_frees_against = mean(freesAgainst),
+    ht_avg_dream_team_points = mean(dreamTeamPoints),
+    ht_avg_rebound_50s = mean(rebound50s),
+    ht_avg_goal_assists = mean(goalAssists),
+    ht_avg_goal_accuracy = mean(goalAccuracy),
+    ht_avg_rating_points = mean(ratingPoints),
+    ht_avg_turnovers = mean(turnovers),
+    ht_avg_intercepts = mean(intercepts),
+    ht_avg_tackles_inside_50 = mean(tacklesInside50),
+    ht_avg_shots_at_goal = mean(shotsAtGoal),
+    ht_avg_score_involvements = mean(scoreInvolvements),
+    ht_avg_metres_gained = mean(metresGained),
+    ht_avg_centre_clearances = mean(clearances.centreClearances),
+    ht_avg_stoppage_clearances = mean(clearances.stoppageClearances),
+    ht_avg_total_clearances = mean(clearances.totalClearances),
+    ht_avg_effective_kicks = mean(extendedStats.effectiveKicks),
+    ht_avg_kick_efficiency = mean(extendedStats.kickEfficiency),
+    ht_avg_kick_to_handball_ratio = mean(extendedStats.kickToHandballRatio),
+    ht_avg_effective_disposals = mean(extendedStats.effectiveDisposals),
+    ht_avg_marks_on_lead = mean(extendedStats.marksOnLead),
+    ht_avg_intercept_marks = mean(extendedStats.interceptMarks),
+    ht_avg_contested_possession_rate = mean(extendedStats.contestedPossessionRate),
+    ht_avg_hitouts_to_advantage = mean(extendedStats.hitoutsToAdvantage),
+    ht_avg_hitout_win_percentage = mean(extendedStats.hitoutWinPercentage),
+    ht_avg_hitout_to_advantage_rate = mean(extendedStats.hitoutToAdvantageRate),
+    ht_avg_ground_ball_gets = mean(extendedStats.groundBallGets),
+    ht_avg_f50_ground_ball_gets = mean(extendedStats.f50GroundBallGets),
+    ht_avg_score_launches = mean(extendedStats.scoreLaunches),
+    ht_avg_pressure_acts = mean(extendedStats.pressureActs),
+    ht_avg_def_half_pressure_acts = mean(extendedStats.defHalfPressureActs),
+    ht_avg_spoils = mean(extendedStats.spoils),
+    ht_avg_ruck_contests = mean(extendedStats.ruckContests),
+    ht_avg_contest_def_one_on_ones = mean(extendedStats.contestDefOneOnOnes),
+    ht_avg_contest_def_losses = mean(extendedStats.contestDefLosses),
+    ht_avg_contest_def_loss_percentage = mean(extendedStats.contestDefLossPercentage),
+    ht_avg_contest_off_one_on_ones = mean(extendedStats.contestOffOneOnOnes),
+    ht_avg_contest_off_wins = mean(extendedStats.contestOffWins),
+    ht_avg_contest_off_wins_percentage = mean(extendedStats.contestOffWinsPercentage),
+    ht_avg_centre_bounce_attendances = mean(extendedStats.centreBounceAttendances),
+    ht_avg_kickins = mean(extendedStats.kickins),
+    ht_avg_kickins_playon = mean(extendedStats.kickinsPlayon)) %>% 
+  rename(hteam = team.name) # rename for joining
+
+ateam_df <- team_df %>%
+  filter(teamStatus == "away") %>% 
+  group_by(round, team.name, teamStatus) %>%
+  summarise( # at = away team
+    at_avg_time_on_ground = mean(timeOnGroundPercentage),
+    at_goals = sum(goals),
+    at_behinds = sum(behinds),
+    at_kicks = sum(kicks),
+    at_handballs = sum(handballs),
+    at_avg_disposals = mean(disposals),
+    at_avg_marks = mean(marks),
+    at_avg_bounces = mean(bounces),
+    at_avg_tackles = mean(tackles),
+    at_avg_contested_possessions = mean(contestedPossessions),
+    at_avg_uncontested_possessions = mean(uncontestedPossessions),
+    at_avg_total_possessions = mean(totalPossessions),
+    at_avg_inside_50s = mean(inside50s),
+    at_avg_marks_inside_50 = mean(marksInside50),
+    at_avg_contested_marks = mean(contestedMarks),
+    at_avg_hitouts = mean(hitouts),
+    at_avg_one_percenters = mean(onePercenters),
+    at_avg_disposal_efficiency = mean(disposalEfficiency),
+    at_avg_clangers = mean(clangers),
+    at_avg_frees_for = mean(freesFor),
+    at_avg_frees_against = mean(freesAgainst),
+    at_avg_dream_team_points = mean(dreamTeamPoints),
+    at_avg_rebound_50s = mean(rebound50s),
+    at_avg_goal_assists = mean(goalAssists),
+    at_avg_goal_accuracy = mean(goalAccuracy),
+    at_avg_rating_points = mean(ratingPoints),
+    at_avg_turnovers = mean(turnovers),
+    at_avg_intercepts = mean(intercepts),
+    at_avg_tackles_inside_50 = mean(tacklesInside50),
+    at_avg_shots_at_goal = mean(shotsAtGoal),
+    at_avg_score_involvements = mean(scoreInvolvements),
+    at_avg_metres_gained = mean(metresGained),
+    at_avg_centre_clearances = mean(clearances.centreClearances),
+    at_avg_stoppage_clearances = mean(clearances.stoppageClearances),
+    at_avg_total_clearances = mean(clearances.totalClearances),
+    at_avg_effective_kicks = mean(extendedStats.effectiveKicks),
+    at_avg_kick_efficiency = mean(extendedStats.kickEfficiency),
+    at_avg_kick_to_handball_ratio = mean(extendedStats.kickToHandballRatio),
+    at_avg_effective_disposals = mean(extendedStats.effectiveDisposals),
+    at_avg_marks_on_lead = mean(extendedStats.marksOnLead),
+    at_avg_intercept_marks = mean(extendedStats.interceptMarks),
+    at_avg_contested_possession_rate = mean(extendedStats.contestedPossessionRate),
+    at_avg_hitouts_to_advantage = mean(extendedStats.hitoutsToAdvantage),
+    at_avg_hitout_win_percentage = mean(extendedStats.hitoutWinPercentage),
+    at_avg_hitout_to_advantage_rate = mean(extendedStats.hitoutToAdvantageRate),
+    at_avg_ground_ball_gets = mean(extendedStats.groundBallGets),
+    at_avg_f50_ground_ball_gets = mean(extendedStats.f50GroundBallGets),
+    at_avg_score_launches = mean(extendedStats.scoreLaunches),
+    at_avg_pressure_acts = mean(extendedStats.pressureActs),
+    at_avg_def_half_pressure_acts = mean(extendedStats.defHalfPressureActs),
+    at_avg_spoils = mean(extendedStats.spoils),
+    at_avg_ruck_contests = mean(extendedStats.ruckContests),
+    at_avg_contest_def_one_on_ones = mean(extendedStats.contestDefOneOnOnes),
+    at_avg_contest_def_losses = mean(extendedStats.contestDefLosses),
+    at_avg_contest_def_loss_percentage = mean(extendedStats.contestDefLossPercentage),
+    at_avg_contest_off_one_on_ones = mean(extendedStats.contestOffOneOnOnes),
+    at_avg_contest_off_wins = mean(extendedStats.contestOffWins),
+    at_avg_contest_off_wins_percentage = mean(extendedStats.contestOffWinsPercentage),
+    at_avg_centre_bounce_attendances = mean(extendedStats.centreBounceAttendances),
+    at_avg_kickins = mean(extendedStats.kickins),
+    at_avg_kickins_playon = mean(extendedStats.kickinsPlayon)) %>% 
+  rename(ateam = team.name) # rename for joining
+
+# # # get whether or not the team won into the team stats dataframes
+# home_win_df <- subset(fixture_df, select = c(round, hteam, home_win))
+# away_win_df <- subset(fixture_df, select = c(round, ateam, away_win))
+# 
+# #
+# hteam_df <- hteam_df %>%
+#   right_join(home_win_df, by = c('round', 'hteam'))
+# 
+# ateam_df <- ateam_df %>%
+#   right_join(away_win_df, by = c('round', 'ateam'))
+
+
+hteam_df
+ateam_df
+```
