@@ -12,5 +12,5 @@ for (i in 1899:2025) {
     fixture <- fetch_fixture_squiggle(i)
 
     # Save to Parquet
-    write_parquet(fixture, paste0("data/squiggle_fixture_", i, ".parquet"))
+    write_parquet(fixture, paste0("data/squiggle_fixture/squiggle_fixture_", i, ".parquet"))
 }

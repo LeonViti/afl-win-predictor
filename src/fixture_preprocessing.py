@@ -1,14 +1,24 @@
 import polars as pl
-from src.config import PROJECT_ROOT
 from collections import defaultdict
+from config import PROJECT_ROOT
 
 # Functions
 def check_parquet_col_dtype(data_path: str) -> None:
     """
-    Function to check for a dtype mismatch in data files. 
+    Inspect Parquet files for column data type inconsistencies.
+
+    This function scans all `.parquet` files within the specified
+    directory and compares the data types of columns across files.
+    It identifies columns that have conflicting dtypes between files
+    (e.g., `Int32` in one file and `Float64` in another) and prints
+    those mismatches to the console.
 
     Args:
-        data_path (str): path to parquet files (e.g. data)
+        data_path (str): Relative path (from PROJECT_ROOT) containing Parquet files
+        to inspect, e.g. "data/squiggle_fixture".
+
+    Returns:
+        None
     """
     # get a list of all parquet files in specificed data path
     parquet_files = list((PROJECT_ROOT / data_path).glob("*.parquet"))
@@ -33,42 +43,50 @@ def check_parquet_col_dtype(data_path: str) -> None:
             print(f"{col}: {dtypes}")
 
 
-# Code 
+def combine_squiggle_fixtures(folder_path:str, output_path:str) -> None:
+    """
+    Combine multiple Squiggle fixture Parquet files into a single dataset.
 
+    This function reads all `.parquet` files located in the specified
+    `folder_path`, standardizes column ordering and selected data types,
+    vertically concatenates the files, and writes the combined dataset
+    to `output_path`.
 
-parquet_path = PROJECT_ROOT / "data/*.parquet"
-df = pl.read_parquet(parquet_path, allow_missing_columns=True)
+    Args:
+        folder_path (str):
+            Relative path (from PROJECT_ROOT) containing Squiggle fixture
+            Parquet files, e.g. "data/squiggle_fixture".
 
-df = (
-    pl.scan_parquet(PROJECT_ROOT / "data/*.parquet",  missing_columns="insert")
-      .with_columns(
-          pl.col("unixtime").cast(pl.Int64),
-          pl.col("timestr").cast(pl.String)
-      )
-      .collect()
-)
-df.write_parquet(PROJECT_ROOT / "data/all_seasons.parquet")
+        output_path (str):
+            Relative path (from PROJECT_ROOT) where the combined Parquet
+            file will be written, e.g.
+            "data/complete_datasets/squiggle_fixture_all_seasons.parquet".
 
+    Returns:
+        None
+    """
+    # get all the parquet files in the data dir
+    parquet_files = list((PROJECT_ROOT / folder_path).glob("*.parquet"))
 
-# test for parquet files
-# get all the parquet files in the data dir
-parquet_files = list((PROJECT_ROOT / "data").glob("*.parquet"))
-
-dfs = []
-for f in parquet_files:
-    df = pl.read_parquet(f)
-    # Ensure unixtime is always Int64
-    if "unixtime" in df.columns:
-        df = df.with_columns(
-            pl.col("unixtime").cast(pl.Float64),
+    dfs = []
+    for f in parquet_files:
+        df = pl.read_parquet(f)
+        # Sort columns alphabetically
+        df = df.select(sorted(df.columns)) 
+        df = df.with_columns(  # fix columns with incorrect dtypes 
+            pl.from_epoch("unixtime", time_unit="s"), # convert to correct datetime (s)
             pl.col("timestr").cast(pl.String)
         )
-    dfs.append(df)
+        dfs.append(df)
 
-# Concatenate all files safely
-df_all = pl.concat(dfs, rechunk=True)
+    # Concatenate all files safely
+    df_all = pl.concat(dfs, rechunk=True)
 
+    df_all.write_parquet(PROJECT_ROOT / output_path)
 
+    print(f"squiggle_fixture_all_seasons.parquet saved at {PROJECT_ROOT / output_path}")
 
-
-fixture_1899 = pl.read_parquet(path)
+# Code 
+folder_path = "data/squiggle_fixture"
+output_path = "data/complete_datasets/squiggle_fixture_all_seasons.parquet"
+combine_squiggle_fixtures(folder_path, output_path)
