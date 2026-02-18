@@ -8,7 +8,7 @@ for merging datasets such as fixtures, players, or teams.
 
 import polars as pl
 from collections import defaultdict
-from config import PROJECT_ROOT
+from src.config import PROJECT_ROOT
 
 # Functions
 def check_parquet_col_dtype(data_path: str) -> None:
