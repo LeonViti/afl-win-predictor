@@ -1,2 +1,16 @@
-# folders
+# Folders
 data/
+
+# Virtual Environments
+.venv/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/

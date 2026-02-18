@@ -8,3 +8,8 @@ dependencies = [
     "notebook>=7.5.0",
     "polars>=1.36.1",
 ]
+
+[dependency-groups]
+dev = [
+    "nbstripout>=0.9.0",
+]
