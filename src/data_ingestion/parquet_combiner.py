@@ -1,3 +1,11 @@
+"""
+This file contains utility functions for combining Parquet files
+produced by `data_extraction.R`. 
+
+These functions provide a consistent and reusable approach
+for merging datasets such as fixtures, players, or teams.
+"""
+
 import polars as pl
 from collections import defaultdict
 from config import PROJECT_ROOT
@@ -42,7 +50,7 @@ def check_parquet_col_dtype(data_path: str) -> None:
         if len(dtypes) > 1:
             print(f"{col}: {dtypes}")
 
-
+# TODO: consider expanding this function to other dtype issues when pulling other tables
 def combine_squiggle_fixtures(folder_path:str, output_path:str) -> None:
     """
     Combine multiple Squiggle fixture Parquet files into a single dataset.
