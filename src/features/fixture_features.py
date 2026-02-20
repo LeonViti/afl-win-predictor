@@ -59,9 +59,12 @@ df_clean = fixture_df.with_columns(
     .alias('venue_location')
 )
 
-# correctly assign datatypes for colums
+# correctly assign datatypes for localtime column
+df_clean = df_clean.with_columns(
+    pl.col("localtime").str.strptime(pl.Datetime, "%Y-%m-%d %H:%M:%S").alias("localtime_dt")
+)
 
-# TODO: correctly assign the correct datatype for the localtime column
+# TODO: create time of day column
 
 # TODO: create a feature from the Timezone (Tz) column
 
