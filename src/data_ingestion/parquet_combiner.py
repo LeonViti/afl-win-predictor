@@ -5,7 +5,7 @@ produced by `data_extraction.R`.
 These functions provide a consistent and reusable approach
 for merging datasets such as fixtures, players, or teams.
 """
-
+# libraries
 import polars as pl
 from collections import defaultdict
 from src.config import PROJECT_ROOT
@@ -94,7 +94,7 @@ def combine_squiggle_fixtures(folder_path:str, output_path:str) -> None:
 
     print(f"squiggle_fixture_all_seasons.parquet saved at {PROJECT_ROOT / output_path}")
 
-# Code 
+# Main Function # TODO: write a main function here 
 folder_path = "data/squiggle_fixture"
 output_path = "data/complete_datasets/squiggle_fixture_all_seasons.parquet"
 combine_squiggle_fixtures(folder_path, output_path)
