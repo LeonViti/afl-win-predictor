@@ -43,16 +43,19 @@ fixture_df = pl.read_parquet(path)
 
 # create column venue_location to represent the state or country (if played outside Aus) of the match
 df_clean = fixture_df.with_columns(
-    pl.when(pl.col('venue').is_in(["Adelaide Hills", "Adelaide Oval", "Norwood Oval", "Football Park"])).then(pl.lit("SA"))
+    pl.when(pl.col('venue').is_in(["Adelaide Hills", "Adelaide Oval", "Norwood Oval", "Football Park", "Barossa Park"])).then(pl.lit("SA"))
     .when(pl.col("venue").is_in(["M.C.G.", "Docklands", "Eureka Stadium", "Kardinia Park", "Marvel Stadium",
                                  "GMHBA Stadium", "Mars Stadium", "Corio Oval", "Brunswick St",
-                                 "Princes Park", "Victoria Park", "Junction Oval"])).then(pl.lit("VIC"))
-    .when(pl.col("venue").is_in(["Carrara", "Gabba", "Cazaly's Stadium", "Riverway Stadium"])).then(pl.lit("QLD"))
-    .when(pl.col("venue").is_in(["S.C.G.", "Sydney Showground", "Stadium Australia", "Blacktown", "Lake Oval"])).then(pl.lit("NSW"))
+                                 "Princes Park", "Victoria Park", "Junction Oval", "East Melbourne",
+                                 "Punt Rd", "Waverley Park", "Windy Hill", "Western Oval", "Glenferrie Oval",
+                                 "Arden St", "Moorabbin Oval", "Olympic Park", "Yarraville Oval", "Coburg Oval",
+                                 "Toorak Park", "Euroa", "Yallourn"])).then(pl.lit("VIC"))
+    .when(pl.col("venue").is_in(["Carrara", "Gabba", "Cazaly's Stadium", "Riverway Stadium", "Brisbane Exhibition"])).then(pl.lit("QLD"))
+    .when(pl.col("venue").is_in(["S.C.G.", "Sydney Showground", "Stadium Australia", "Blacktown", "Lake Oval", "Albury"])).then(pl.lit("NSW"))
     .when(pl.col("venue").is_in(["Marrara Oval", "Traeger Park"])).then(pl.lit("NT"))
-    .when(pl.col("venue").is_in(["Bellerive Oval", "York Park", "University of Tasmania Stadium"])).then(pl.lit("TAS"))
-    .when(pl.col("venue").is_in(["Manuka Oval", "UNSW Canberra Oval"])).then(pl.lit("ACT"))
-    .when(pl.col("venue").is_in(["Perth Stadium", "Optus Stadium", "Subiaco"])).then(pl.lit("WA"))
+    .when(pl.col("venue").is_in(["Bellerive Oval", "York Park", "University of Tasmania Stadium", "North Hobart"])).then(pl.lit("TAS"))
+    .when(pl.col("venue").is_in(["Manuka Oval", "UNSW Canberra Oval", "Bruce Stadium"])).then(pl.lit("ACT"))
+    .when(pl.col("venue").is_in(["Perth Stadium", "Optus Stadium", "Subiaco", "W.A.C.A.", "Hands Oval"])).then(pl.lit("WA"))
     .when(pl.col("venue").is_in(["Jiangwan Stadium", "Adelaide Arena at Jiangwan Stadium"])).then(pl.lit("CHN"))
     .when(pl.col("venue").is_in(["Wellington"])).then(pl.lit("NZL"))
     .otherwise(None)  # otherwise null
@@ -64,7 +67,36 @@ df_clean = df_clean.with_columns(
     pl.col("localtime").str.strptime(pl.Datetime, "%Y-%m-%d %H:%M:%S").alias("localtime_dt")
 )
 
-# TODO: create time of day column
+# filter rows where column is null
+# df_clean.filter(pl.col("venue_location").is_null())
 
-# TODO: create a feature from the Timezone (Tz) column
+# EDA: check for null values
+print("Null Values:")
+df_clean.select(pl.all().null_count())
 
+# drop redundant columns 
+# NOTE: we only require timezone and localtime 
+df_clean = df_clean.drop(['timestr', 'unixtime'])
+
+# EDA: display the total games played in each location
+df_clean["venue_location"].value_counts().sort(by="count", descending=True)
+df_clean["tz"].value_counts().sort(by="count", descending=True)
+
+
+
+# TODO: create a feature from the Timezone (Tz) column, 
+# to represent a disruption in travel time subtract home tz from away tz
+
+
+# TODO: create is_interstate_game flag
+# is_interstate_game = home_state != away_state
+
+# TODO: create time_of_day column
+
+# TODO: create is_weekend flag
+
+# TODO: create is_night_game flag 
+
+# TODO: create day_of_week column
+
+# TODO: create month column 
