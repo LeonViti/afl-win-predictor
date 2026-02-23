@@ -81,6 +81,42 @@ df_clean = df_clean.drop(['timestr', 'unixtime'])
 # EDA: display the total games played in each location
 df_clean["venue_location"].value_counts().sort(by="count", descending=True)
 df_clean["tz"].value_counts().sort(by="count", descending=True)
+df_clean["ateam"].value_counts().sort(by="count", descending=True)
+# NOTE: the tz column is only for adjusting timezones, it is not useful here
+
+# TODO: create timezone columns to represent the timezone of the home and away teams 
+team_tz_map = pl.DataFrame({
+    "team": [
+        "West Coast",
+        "Fremantle",
+        "Adelaide",
+        "Port Adelaide",
+        "Brisbane",
+        "Gold Coast",
+        "Sydney",
+        "GWS",
+        "Carlton",
+        "Collingwood",
+        "Essendon",
+        "Hawthorn",
+        "Melbourne",
+        "North Melbourne",
+        "Richmond",
+        "St Kilda",
+        "Western Bulldogs",
+        "Geelong",
+
+    ],
+    "team_tz": [
+        8.00, 8.00,
+        9.30, 09.30,
+        10.00, 10.00,
+        10.00, 10.00,
+        10.00, 10.00, 10.00, 10.00,
+        10.00, 10.00, 10.00, 10.00,
+        10.00, 10.00
+    ]
+})
 
 
 
