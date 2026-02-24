@@ -89,6 +89,8 @@ df_clean = df_clean.drop(['timestr', 'unixtime'])
 
 # TODO: create timezone columns to represent the timezone of the home and away teams 
 # TODO: put this into a function 
+
+# load timezone mappings and join them to the dataframe
 venue_tz_map = pl.read_csv(PROJECT_ROOT / "src/reference/venue_tz_map.csv")
 team_tz_map = pl.read_csv(PROJECT_ROOT / "src/reference/team_tz_map.csv")
 
@@ -114,7 +116,7 @@ df = (
     )
 )
 
-# EDA: Perform a NULL check to confirm there are no missing terms
+# EDA: Perform a NULL check to confirm there are no missing terms (include in func)
 df.select([
     pl.col("hteam_tz_min").is_null().sum().alias("null_home_tz"),
     pl.col("ateam_tz_min").is_null().sum().alias("null_away_tz"),
@@ -134,7 +136,7 @@ df = df.with_columns([ # tz shift is the absolute value of the timezone shift
 # let tz_shift_advantage represent the timezone advantage from the home team
 df = df.with_columns((pl.col("away_tz_shift_min") - pl.col("home_tz_shift_min")).alias("tz_shift_advantage"))
 
-df.filter(pl.col("venue_location") == "NZL")
+
 
 # TODO: create is_interstate_game flag
 # is_interstate_game = home_state != away_state
