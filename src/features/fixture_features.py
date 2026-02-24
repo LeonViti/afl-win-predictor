@@ -3,6 +3,7 @@ import os
 os.chdir(r"C:\Users\leon_\Documents\personal_projects\afl-win-predictor")
 
 # Imports 
+import json
 import polars as pl
 from src.config import PROJECT_ROOT
 
@@ -11,29 +12,23 @@ def create_venue_location_feat(df: pl.DataFrame) -> pl.DataFrame:
     """
     
     """
-    venue_loc_df = df.with_columns(
-        pl.when(pl.col('venue').is_in(["Adelaide Hills", "Adelaide Oval", "Norwood Oval", "Football Park", "Barossa Park"])).then(pl.lit("SA"))
-        .when(pl.col("venue").is_in(["M.C.G.", "Docklands", "Eureka Stadium", "Kardinia Park", "Marvel Stadium",
-                                    "GMHBA Stadium", "Mars Stadium", "Corio Oval", "Brunswick St",
-                                    "Princes Park", "Victoria Park", "Junction Oval", "East Melbourne",
-                                    "Punt Rd", "Waverley Park", "Windy Hill", "Western Oval", "Glenferrie Oval",
-                                    "Arden St", "Moorabbin Oval", "Olympic Park", "Yarraville Oval", "Coburg Oval",
-                                    "Toorak Park", "Euroa", "Yallourn"])).then(pl.lit("VIC"))
-        .when(pl.col("venue").is_in(["Carrara", "Gabba", "Cazaly's Stadium", "Riverway Stadium", "Brisbane Exhibition"])).then(pl.lit("QLD"))
-        .when(pl.col("venue").is_in(["S.C.G.", "Sydney Showground", "Stadium Australia", "Blacktown", "Lake Oval", "Albury"])).then(pl.lit("NSW"))
-        .when(pl.col("venue").is_in(["Marrara Oval", "Traeger Park"])).then(pl.lit("NT"))
-        .when(pl.col("venue").is_in(["Bellerive Oval", "York Park", "University of Tasmania Stadium", "North Hobart"])).then(pl.lit("TAS"))
-        .when(pl.col("venue").is_in(["Manuka Oval", "UNSW Canberra Oval", "Bruce Stadium"])).then(pl.lit("ACT"))
-        .when(pl.col("venue").is_in(["Perth Stadium", "Optus Stadium", "Subiaco", "W.A.C.A.", "Hands Oval"])).then(pl.lit("WA"))
-        .when(pl.col("venue").is_in(["Jiangwan Stadium", "Adelaide Arena at Jiangwan Stadium"])).then(pl.lit("CHN"))
-        .when(pl.col("venue").is_in(["Wellington"])).then(pl.lit("NZL"))
-        .otherwise(None)  # otherwise null
-        .alias('venue_location')
-    )
+    # Load JSON as a Python dict
+    # TODO: make Path a variable for this function 
+    with open(PROJECT_ROOT / "src/reference/venue_location_mapping.json") as f:
+        venue_to_location = json.load(f)
+
+    # Convert dict to Polars DataFrame
+    venue_map = pl.DataFrame({
+        "venue": list(venue_to_location.keys()),
+        "venue_location": list(venue_to_location.values())
+    })
+
+    # Join to your fixture DataFrame
+    venue_loc_df = df.join(venue_map, on="venue", how="left")
 
     return venue_loc_df
 
-
+# TODO: make venue_tz_map and team_tz_map paths then add appropriate debugging, repeat for above function 
 def create_timezone_feats(
         venue_tz_map: pl.DataFrame, 
         team_tz_map: pl.DataFrame, 
