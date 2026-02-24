@@ -67,34 +67,38 @@ df_clean = df_clean.with_columns(
     pl.col("localtime").str.strptime(pl.Datetime, "%Y-%m-%d %H:%M:%S").alias("localtime_dt")
 )
 
-# filter rows where column is null
-# df_clean.filter(pl.col("venue_location").is_null())
-
 # EDA: check for null values
 print("Null Values:")
 df_clean.select(pl.all().null_count())
+# filter rows where column is null
+# df_clean.filter(pl.col("venue_location").is_null())
+
+# EDA: display the total games played in each location
+pl.Config.set_tbl_rows(20) # set the number of rows to be displayed in the interactive terminal
+# pl.Config.set_tbl_cols(20) # set the number of columns to be displayed in the interactive terminal
+pl.Config.set_fmt_str_lengths(50)
+df_clean["venue_location"].value_counts().sort(by="count", descending=True)
+df_clean["tz"].value_counts().sort(by="count", descending=True)
+df_clean["ateam"].value_counts().sort(by="count", descending=True)
 
 # drop redundant columns 
 # NOTE: we only require timezone and localtime 
 df_clean = df_clean.drop(['timestr', 'unixtime'])
 
-# EDA: display the total games played in each location
-df_clean["venue_location"].value_counts().sort(by="count", descending=True)
-df_clean["tz"].value_counts().sort(by="count", descending=True)
-df_clean["ateam"].value_counts().sort(by="count", descending=True)
 # NOTE: the tz column is only for adjusting timezones, it is not useful here
 
 # TODO: create timezone columns to represent the timezone of the home and away teams 
+# TODO: put this into a function 
 team_tz_map = pl.DataFrame({
     "team": [
         "West Coast",
         "Fremantle",
         "Adelaide",
         "Port Adelaide",
-        "Brisbane",
+        "Brisbane Lions",
         "Gold Coast",
         "Sydney",
-        "GWS",
+        "Greater Western Sydney",
         "Carlton",
         "Collingwood",
         "Essendon",
@@ -105,24 +109,106 @@ team_tz_map = pl.DataFrame({
         "St Kilda",
         "Western Bulldogs",
         "Geelong",
-
+        "Fitzroy", # Note Fitzroy and University no longer exist in the AFL
+        "University" # Melbourne University Football Club
     ],
     "team_tz": [
-        8.00, 8.00,
-        9.30, 09.30,
-        10.00, 10.00,
-        10.00, 10.00,
-        10.00, 10.00, 10.00, 10.00,
-        10.00, 10.00, 10.00, 10.00,
-        10.00, 10.00
+        "+8:00", "+8:00",
+        "+9:30", "+9:30",
+        "+10:00", "+10:00",
+        "+10:00", "+10:00",
+        "+10:00", "+10:00", "+10:00", "+10:00",
+        "+10:00", "+10:00", "+10:00", "+10:00",
+        "+10:00", "+10:00", "+10:00", "+10:00"
+    ], 
+    "team_tz_min": [ # tz converted to min, 
+        480, 480,
+        540, 540,
+        600, 600,
+        600, 600,
+        600, 600, 600, 600,
+        600, 600, 600, 600,
+        600, 600, 600, 600
     ]
 })
 
+team_tz_map.write_csv(PROJECT_ROOT / "src/reference/team_tz_map.csv")
 
+venue_tz_map = pl.DataFrame({
+    "venue_location": [
+        "WA", # +8:00
+        "CHN", # +8:00
+        "SA", # +9:30
+        "NT", # +9:30
+        "VIC", # +10:00
+        "NSW", # +10:00
+        "QLD", # +10:00
+        "TAS", # +10:00
+        "ACT", # +10:00
+        "NZL", # +12:00
+    ],
+    "venue_location_tz": [
+        "+8:00", "+8:00",
+        "+9:30", "+9:30",
+        "+10:00", "+10:00", "+10:00",
+        "+10:00", "+10:00",
+        "+12:00"
+    ], 
+    "venue_location_tz_min": [ # tz converted to min, 
+        480, 480,
+        540, 540,
+        600, 600, 600,
+        600, 600,
+        720
+    ]
+})
 
-# TODO: create a feature from the Timezone (Tz) column, 
-# to represent a disruption in travel time subtract home tz from away tz
+venue_tz_map = pl.read_csv(PROJECT_ROOT / "src/reference/venue_tz_map.csv")
+team_tz_map = pl.read_csv(PROJECT_ROOT / "src/reference/team_tz_map.csv")
 
+# join the timezone features to the dataframe
+df = (
+    df_clean
+    .join(
+        team_tz_map.select(["team", "team_tz_min"])
+                   .rename({"team": "hteam", "team_tz_min": "hteam_tz_min"}),
+        on="hteam",
+        how="left"
+    )
+    .join(
+        team_tz_map.select(["team", "team_tz_min"])
+                   .rename({"team": "ateam", "team_tz_min": "ateam_tz_min"}),
+        on="ateam",
+        how="left"
+    )
+    .join(
+        venue_tz_map.select(["venue_location", "venue_location_tz_min"]),
+        on="venue_location",
+        how="left"
+    )
+)
+
+# EDA: Perform a NULL check to confirm there are no missing terms
+df.select([
+    pl.col("hteam_tz_min").is_null().sum().alias("null_home_tz"),
+    pl.col("ateam_tz_min").is_null().sum().alias("null_away_tz"),
+    pl.col("venue_location_tz_min").is_null().sum().alias("null_venue_tz"),
+])
+
+# create the timezone features 
+df = df.with_columns([
+    (pl.col("venue_location_tz_min") - pl.col("hteam_tz_min")).alias("home_tz_diff_min"),
+    (pl.col("venue_location_tz_min") - pl.col("ateam_tz_min")).alias("away_tz_diff_min"),
+])
+
+df = df.with_columns([ # tz shift is the absolute value of the timezone shift
+    pl.col("home_tz_diff_min").abs().alias("home_tz_shift_min"),
+    pl.col("away_tz_diff_min").abs().alias("away_tz_shift_min"),
+])
+# let tz_shift_advantage represent the timezone advantage from the home team
+df = df.with_columns((pl.col("away_tz_shift_min") - pl.col("home_tz_shift_min")).alias("tz_shift_advantage"))
+
+df.filter(pl.col("venue_location") == "NZL")
 
 # TODO: create is_interstate_game flag
 # is_interstate_game = home_state != away_state
