@@ -1,3 +1,8 @@
+"""
+NOTE: Level modelling occurs will be at the match level 
+where each row represents two teams, a home and an away team.
+"""
+
 # FOR INTERACTIVE SESSION comment out later
 import os
 os.chdir(r"C:\Users\leon_\Documents\personal_projects\afl-win-predictor")
@@ -115,16 +120,11 @@ df_clean = df_clean.with_columns(
     pl.col("localtime").str.strptime(pl.Datetime, "%Y-%m-%d %H:%M:%S").alias("localtime_dt")
 )
 
-# load timezone mappings and join them to the dataframe
+# CREATE TIMEZONE FEATS
+# load timezone mappings 
 venue_tz_map = pl.read_csv(PROJECT_ROOT / "src/reference/venue_tz_map.csv")
 team_tz_map = pl.read_csv(PROJECT_ROOT / "src/reference/team_tz_map.csv")
-
-# create timezone features
-# NOTE: the tz column is only for adjusting timezones, it is not useful here
 df_clean = create_timezone_feats(venue_tz_map, team_tz_map, df_clean)
-
-# drop redundant columns 
-df_clean = df_clean.drop(['timestr', 'unixtime'])
 
 # TODO: create is_interstate_game flag
 # is_interstate_game = home_state != away_state
@@ -138,6 +138,70 @@ df_clean = df_clean.drop(['timestr', 'unixtime'])
 # TODO: create day_of_week column
 
 # TODO: create month column 
+
+# CREATE WINDOWED FEATS # TODO: make into function 
+# melt home and away sides to long format (team lvl); store if the team won or lost
+home_df = df_clean.select([ # select all home team games
+    pl.col("localtime_dt"),
+    pl.col("hteam").alias("team"),
+    # win = 1 if wins, 0.5 if draw, 0 if loss
+    pl.when(pl.col("hscore") > pl.col("ascore")).then(1.0) 
+      .when(pl.col("hscore") == pl.col("ascore")).then(0.5)
+      .otherwise(0.0)
+      .alias("win")
+])
+
+away_df = df_clean.select([  # select all away team games
+    pl.col("localtime_dt"),
+    pl.col("ateam").alias("team"),
+    # win = 1 if away wins, 0.5 if draw, 0 if loss
+    pl.when(pl.col("ascore") > pl.col("hscore")).then(1.0) 
+      .when(pl.col("ascore") == pl.col("hscore")).then(0.5)
+      .otherwise(0.0)
+      .alias("win")
+])
+
+# concatenate teams so each row represents one team and sort by date
+team_df = pl.concat([home_df, away_df]).sort(["team", "localtime_dt"])  # ensure correct order
+
+team_df = team_df.with_columns([
+    # shift wins by 1 to exclude current game for each team
+    pl.col("win").shift(1).over("team").alias("win_lag1") 
+])
+
+# rolling sum/mean for last 5 games (excluding current)
+team_df = team_df.with_columns([
+    pl.col("win_lag1")
+      .rolling_mean(window_size=5, min_samples=1)
+      .over("team")  # ensures rolling is per team
+      .alias("last5_win_rate")
+])
+
+# Fill nulls with 0 as events are rare
+team_df = team_df.with_columns([
+    pl.col("win_lag1").fill_null(0),
+    pl.col("last5_win_rate").fill_null(0)
+])
+
+# Last 5 games win rate per team
+win_rate = team_df.select(["localtime_dt", "team", "last5_win_rate"])
+
+# Merge home features
+df_clean = df_clean.join(
+    win_rate.rename({"team":"hteam", "last5_win_rate":"hlast5_win_rate"}),
+    on=["localtime_dt", "hteam"],
+    how="left"
+)
+
+# Merge away features
+df_clean = df_clean.join(
+    win_rate.rename({"team":"ateam", "last5_win_rate":"alast5_win_rate"}),
+    on=["localtime_dt", "ateam"],
+    how="left"
+)
+
+# drop redundant columns NOTE: the tz column is only for adjusting timezones, it is not useful here
+df_clean = df_clean.drop(['timestr', 'unixtime'])
 
 ##########################
 # EDA 
