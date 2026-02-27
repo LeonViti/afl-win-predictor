@@ -280,3 +280,97 @@ with mlflow.start_run(run_name="xgb_train"):
     plt.close()
 
 # TODO Perform Target Encoding for high cardinality features
+import optuna
+import mlflow
+import mlflow.xgboost
+import xgboost as xgb
+from sklearn.metrics import roc_auc_score
+
+mlflow.set_experiment("afl_win_predictor")
+
+# Objective function for Optuna
+def objective(trial):
+    # Suggest hyperparameters
+    params = {
+        "objective": "binary:logistic",
+        "eval_metric": "auc",
+        "seed": 42,
+        "device": "cpu",
+        "scale_pos_weight": scale_pos_weight,
+        "max_depth": trial.suggest_int("max_depth", 3, 10),
+        "learning_rate": trial.suggest_loguniform("learning_rate", 0.01, 0.3),
+        "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
+        "subsample": trial.suggest_uniform("subsample", 0.5, 1.0),
+        "colsample_bytree": trial.suggest_uniform("colsample_bytree", 0.5, 1.0),
+        "gamma": trial.suggest_uniform("gamma", 0.0, 5.0)
+    }
+
+    # Train model with early stopping
+    evals_result = {}
+    model = xgb.train(
+        params,
+        dtrain,
+        num_boost_round=2000,
+        evals=[(dtrain, "train"), (dval, "validation")],
+        early_stopping_rounds=20,
+        verbose_eval=False,
+        evals_result=evals_result
+    )
+
+    # Use the best validation AUC as the objective
+    val_auc = evals_result['validation']['auc'][model.best_iteration]
+    
+    # Log everything in MLflow
+    with mlflow.start_run(nested=True):
+        mlflow.log_params(params)
+        mlflow.log_metric("val_auc", val_auc)
+        mlflow.log_metric("best_iteration", model.best_iteration + 1)
+        
+        # Save training history plot
+        train_auc = evals_result['train']['auc']
+        val_auc_history = evals_result['validation']['auc']
+        epochs = range(len(train_auc))
+        plt.figure(figsize=(8,6))
+        plt.plot(epochs, train_auc, label='Train AUC')
+        plt.plot(epochs, val_auc_history, label='Validation AUC')
+        plt.axvline(model.best_iteration, color='red', linestyle='--', label='Best Iteration')
+        plt.title("Training History")
+        plt.xlabel("Iteration")
+        plt.ylabel("AUC")
+        plt.legend()
+        plt.grid(True)
+        plt.savefig("training_history.png")
+        mlflow.log_artifact("training_history.png")
+        plt.close()
+        
+        # Log XGBoost model
+        mlflow.xgboost.log_model(
+            xgb_model=model,
+            name="afl_xgb_model",
+            registered_model_name="AFLWinPredictor"
+        )
+    
+    return val_auc  # Optuna maximizes this
+
+# Create the study and optimize
+study = optuna.create_study(direction="maximize")
+study.optimize(objective, n_trials=20, n_jobs=1)  # n_trials can be larger
+
+# Best trial
+best_trial = study.best_trial
+print("Best validation AUC:", best_trial.value)
+print("Best hyperparameters:", best_trial.params)
+
+# Path to the model in the run
+model_uri = "runs:/0c5b080bac5a4b58a06b1fcb6c26a1d6/afl_xgb_model"
+
+loaded_model = mlflow.xgboost.load_model(model_uri)
+
+# Use it for predictions
+y_probs = loaded_model.predict(dtest)
+
+# plot thresholds vs accuracies
+plot_accuracy_vs_threshold(loaded_model, dval, y_val)
+
+# CM WITH THRESHOLD
+plot_cm_with_threshold(loaded_model, dval, y_val, dtest, y_test)
