@@ -9,6 +9,7 @@ import numpy as np
 import polars as pl
 import xgboost as xgb
 import matplotlib.pyplot as plt
+from typing import Optional
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, roc_curve, auc
 from sklearn.metrics import precision_recall_curve, average_precision_score
@@ -20,28 +21,128 @@ from src.features.fixture_features import compute_fixture_features
 #####################
 # Functions
 #####################
-def plot_accuracy_vs_threshold(model: xgb.Booster, dval: xgb.DMatrix, y_val:pl.Series) -> None:
+def plot_confusion_matrix(
+    model:xgb.Booster,
+    dmatrix:xgb.DMatrix,
+    y:pl.Series, 
+    set_name: Optional[str] = "",
+    threshold: Optional[float] = 0.5
+) -> None:
+    """
+    Plots a confusion matrix. 
+
+    Args:
+        model: Trained binary classification model with a `.predict()` method. 
+        dmatrix: Dmatrix dataframe. E.g. dtest, dval, dtrain. 
+        y: True labels for the set of interest. E.g. y_test, y_val, y_train. 
+        threshold: threshold to filter classification cut-off (default is 0.5)
+    """
+
+    # get proba predictions (0.0 to 1.0)
+    y_probs = model.predict(dmatrix)
+
+    # convert to binary classes (1 if prob > threshold [default 0.5] else 0)
+    y_preds = (y_probs > threshold).astype(int)
+
+    # compute the confusion matrix
+    cm = confusion_matrix(y, y_preds)
+
+    # plot the confusion matrix
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["Loss", "Win"])
+    disp.plot(cmap="Purples", values_format="d")
+    plt.title(f"{set_name} Confusion Matrix (Threshold={threshold:.2f})")
+    plt.show()
+
+def plot_training_history(evals_result: dict) -> None:
+    """
+    Plots the training history to compare train and validation performance during a run. 
+
+    Args:
+        evals_result: dictionary containing the train and val results per iteration. 
+    """
+    train_auc = evals_result['train']['auc']
+    val_auc = evals_result['validation']['auc']
+    epochs = range(len(train_auc))
+    # Plot
+    plt.figure(figsize=(10, 6))
+    plt.plot(epochs, train_auc, label='Train AUC', color='blue')
+    plt.plot(epochs, val_auc, label='Validation AUC', color='orange')
+    # Add a vertical line where early stopping happened
+    plt.axvline(x=model.best_iteration, color='red', linestyle='--', label='Best Iteration')
+    plt.title('AFL Model Training History')
+    plt.xlabel('Number of Iterations')
+    plt.ylabel('AUC Score')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+def plot_feature_importance(
+    model: xgb.Booster,
+    importance_type: Optional[str] = 'gain',
+    max_num_features: Optional[int] = 10
+) -> None:
+    """
+    Plots the top features by importance from an XGBoost model.
+
+    Args:
+        model: Trained XGBoost model.
+        importance_type: Type of feature importance to plot. Default is 'gain'
+        max_num_features: Maximum number of top features to display. Default is 10.
+
+    Displays:
+        A matplotlib bar plot showing feature importance.
+    """
+
+    # TODO: review other types of feature importance
+    # 'gain' is usually important for interpreting feature contribution
+    # xgb.plot_importance(model, importance_type=importance_type, max_num_features=max_num_features)
+
+    # Get feature importance as a dictionary
+    importance_dict = model.get_score(importance_type=importance_type)
+
+    # Sort by importance
+    sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
+    sorted_features = sorted_features[:max_num_features] # filter for max_feats
+
+    features, scores = zip(*sorted_features) # extract data from dict as tuples
+
+    # Plot
+    plt.figure(figsize=(10,6))
+    bars = plt.barh(
+        features[::-1],  # reverse so top features appear on top
+        scores[::-1],
+        color='darkorchid',
+        edgecolor='black',
+        linewidth=0.5,
+        height=0.5,
+        zorder=2
+    )
+    # Add value labels at the end of each bar
+    for bar, score in zip(bars, scores[::-1]):
+        plt.text(
+            bar.get_width() + max(scores)*0.01,  # slightly past the bar end
+            bar.get_y() + bar.get_height()/2,
+            f"{score:.3f}",  # rounded to 3 dp
+            va='center',
+            ha='left',
+            fontsize=9
+        )
+
+    plt.xlabel("Importance Score")
+    plt.title(f"AFL Feature Importance ({importance_type})")
+    plt.grid(alpha=1, axis='x', zorder=1)
+    plt.show()
+
+def plot_accuracy_vs_threshold(thresholds: np.ndarray, accuracies: np.ndarray, best_acc: np.float64, best_t: np.float64) -> None:
     """
     Creates accuracy vs threshold plot from the Validation set.
 
     Args:
-        model: Trained binary classification model with a `.predict()` method. 
-        dval: Validation dataframe. 
-        y_val: True labels for the validation set.
+        thresholds (np.ndarray): Array of threshold values used for evaluation.
+        accuracies (np.ndarray): Accuracy values corresponding to each threshold.
+        best_acc (np.float64): Maximum accuracy achieved.
+        best_t (np.float64): Threshold that gives the maximum accuracy.
     """
-    # predict accuracy values for differing thresholds
-    y_scores = model.predict(dval) 
-    thresholds = np.linspace(0, 1, 200)
-    accuracies = []
-    for t in thresholds:
-        y_pred = (y_scores >= t).astype(int)
-        acc = accuracy_score(y_val, y_pred)
-        accuracies.append(acc)
-    accuracies = np.array(accuracies)
-    best_idx = np.argmax(accuracies)
-    best_t = thresholds[best_idx]
-    best_acc = accuracies[best_idx]
-
     # plot the graph
     plt.figure(figsize=(6,4), dpi=150)
     plt.plot(thresholds, accuracies, label=f"BA = {best_acc:.1%}", color='darkorchid', zorder=3)
@@ -56,38 +157,6 @@ def plot_accuracy_vs_threshold(model: xgb.Booster, dval: xgb.DMatrix, y_val:pl.S
     plt.show()
     print("Best threshold:", best_t)
     print("Best accuracy:", best_acc)
-
-def plot_cm_with_threshold(model: xgb.Booster, dval: xgb.DMatrix, y_val:pl.Series, dtest:xgb.DMatrix, y_test:pl.Series):
-    # calc the best threshold value fr val set TODO: consider moving this to the code block
-    """
-    Plots the confusion matrix with the threshold that maximises accuracy.
-
-    Args:
-        model: Trained binary classification model with a `.predict()` method. 
-        dval: DMatrix Validation dataframe. 
-        y_val: True labels for the validation set.
-        dtest: DMatrix test dataframe. 
-        y_test: True labels for the test set.
-    """
-    y_scores = model.predict(dval) 
-    thresholds = np.linspace(0, 1, 200)
-    accuracies = []
-    for t in thresholds:
-        y_pred = (y_scores >= t).astype(int)
-        acc = accuracy_score(y_val, y_pred)
-        accuracies.append(acc)
-    accuracies = np.array(accuracies)
-    best_idx = np.argmax(accuracies)
-    best_t = thresholds[best_idx]
-
-    # get test set predictions and plot the confusion matrix
-    y_probs = model.predict(dtest)
-    y_preds = (y_probs > best_t).astype(int)
-    cm = confusion_matrix(y_test, y_preds)
-    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["Loss", "Win"])
-    disp.plot(cmap="Blues", values_format="d")
-    plt.title("AFL Win Predictor: Confusion Matrix")
-    plt.show()
 
 #####################
 # Code
@@ -175,46 +244,15 @@ model = xgb.train(
 #     evals_result=evals_result
 # )
 
-# PLOT THE CONFUSION MATRIX
-# 1. Get probability predictions (0.0 to 1.0)
-y_probs = model.predict(dtest)
+# PLOT THE BASE TEST CONFUSION MATRIX
+plot_confusion_matrix(model, dtest, y_test, "Test")
 
-# 2. Convert to binary classes (1 if prob > 0.5 else 0)
-y_preds = (y_probs > 0.5).astype(int)
-
-# 3. Compute the confusion matrix
-cm = confusion_matrix(y_test, y_preds)
-
-disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["Loss", "Win"])
-disp.plot(cmap="Blues", values_format="d")
-
-plt.title("AFL Win Predictor: Confusion Matrix")
-plt.show()
-
-# Extract metrics
-train_auc = evals_result['train']['auc']
-val_auc = evals_result['validation']['auc']
-epochs = range(len(train_auc))
-# Plot
-plt.figure(figsize=(10, 6))
-plt.plot(epochs, train_auc, label='Train AUC', color='blue')
-plt.plot(epochs, val_auc, label='Validation AUC', color='orange')
-# Add a vertical line where early stopping happened
-plt.axvline(x=model.best_iteration, color='red', linestyle='--', label='Best Iteration')
-plt.title('AFL Model Training History')
-plt.xlabel('Number of Iterations')
-plt.ylabel('AUC Score')
-plt.legend()
-plt.grid(True)
-plt.show()
-
+# PLOT THE TRAINING HISTORY
+plot_training_history(evals_result)
 
 # Plotting the feature importance
 # 'gain' is the most important metric for interpreting feature contribution
-plt.figure(figsize=(10, 8))
-xgb.plot_importance(model, importance_type='gain', max_num_features=10)
-plt.title("AFL Feature Importance (Gain)")
-plt.show()
+plot_feature_importance(model, "gain", 10)
 
 # Plotting the ROC AUC
 y_probs = model.predict(dtest)
@@ -248,11 +286,28 @@ plt.title(f"Precision-Recall Curve (Avg. Precision = {ap_score:.3f})")
 plt.grid(alpha=0.3)
 plt.show()
 
-# plot thresholds vs accuracies
-plot_accuracy_vs_threshold(model, dval, y_val)
+###############################
+# POST THRESHOLD ADJUSTMENT
+###############################
 
-# CM WITH THRESHOLD
-plot_cm_with_threshold(model, dval, y_val, dtest, y_test)
+# predict accuracy values for differing thresholds and get the best threshold
+y_scores = model.predict(dval) 
+thresholds = np.linspace(0, 1, 200)
+accuracies = []
+for t in thresholds:
+    y_pred = (y_scores >= t).astype(int)
+    acc = accuracy_score(y_val, y_pred)
+    accuracies.append(acc)
+accuracies = np.array(accuracies)
+best_idx = np.argmax(accuracies)
+best_t = thresholds[best_idx]
+best_acc = accuracies[best_idx]
+
+# plot the accuracy vs threshold to select the threshold to maximise accuracy 
+plot_accuracy_vs_threshold(thresholds, accuracies, best_acc, best_t)
+
+# plot the confusion matrix with the best threshold set
+plot_confusion_matrix(model, dtest, y_test, "BT Test", best_t)
 
 # mlflow
 mlflow.set_experiment("afl_win_predictor")
