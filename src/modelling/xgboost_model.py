@@ -22,7 +22,7 @@ from src.features.fixture_features import compute_fixture_features
 #####################
 def plot_accuracy_vs_threshold(model: xgb.Booster, dval: xgb.DMatrix, y_val:pl.Series) -> None:
     """
-    Creates accuracy vs threshold plot.
+    Creates accuracy vs threshold plot from the Validation set.
 
     Args:
         model: Trained binary classification model with a `.predict()` method. 
@@ -59,6 +59,16 @@ def plot_accuracy_vs_threshold(model: xgb.Booster, dval: xgb.DMatrix, y_val:pl.S
 
 def plot_cm_with_threshold(model: xgb.Booster, dval: xgb.DMatrix, y_val:pl.Series, dtest:xgb.DMatrix, y_test:pl.Series):
     # calc the best threshold value fr val set TODO: consider moving this to the code block
+    """
+    Plots the confusion matrix with the threshold that maximises accuracy.
+
+    Args:
+        model: Trained binary classification model with a `.predict()` method. 
+        dval: DMatrix Validation dataframe. 
+        y_val: True labels for the validation set.
+        dtest: DMatrix test dataframe. 
+        y_test: True labels for the test set.
+    """
     y_scores = model.predict(dval) 
     thresholds = np.linspace(0, 1, 200)
     accuracies = []
@@ -165,9 +175,7 @@ model = xgb.train(
 #     evals_result=evals_result
 # )
 
-
-print(evals_result['train']['auc'][:5])
-
+# PLOT THE CONFUSION MATRIX
 # 1. Get probability predictions (0.0 to 1.0)
 y_probs = model.predict(dtest)
 
@@ -201,7 +209,7 @@ plt.grid(True)
 plt.show()
 
 
-# Plotting the importance
+# Plotting the feature importance
 # 'gain' is the most important metric for interpreting feature contribution
 plt.figure(figsize=(10, 8))
 xgb.plot_importance(model, importance_type='gain', max_num_features=10)
