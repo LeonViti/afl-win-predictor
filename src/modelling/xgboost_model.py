@@ -93,10 +93,6 @@ def plot_feature_importance(
         A matplotlib bar plot showing feature importance.
     """
 
-    # TODO: review other types of feature importance
-    # 'gain' is usually important for interpreting feature contribution
-    # xgb.plot_importance(model, importance_type=importance_type, max_num_features=max_num_features)
-
     # Get feature importance as a dictionary
     importance_dict = model.get_score(importance_type=importance_type)
 
@@ -128,9 +124,30 @@ def plot_feature_importance(
             fontsize=9
         )
 
-    plt.xlabel("Importance Score")
-    plt.title(f"AFL Feature Importance ({importance_type})")
+    plt.xlabel(f"Importance Score ({importance_type})")
+    plt.title(f"Feature Importance ({importance_type})")
     plt.grid(alpha=1, axis='x', zorder=1)
+    plt.show()
+
+def plot_train_val_test_auc(dmats:list[xgb.DMatrix], ys:list[pl.Series]) -> None:
+    plt.figure(figsize=(8,8))
+
+    colors = ["mediumpurple", "darkorchid", "rebeccapurple"]  # shades of purple
+    labels = ["Train", "Validation", "Test"]
+    # dmats = [dtrain, dval, dtest]
+    # ys = [y_train, y_val, y_test]
+
+    for y_true, y_scores, label, color in zip(ys, [model.predict(d) for d in dmats], labels, colors):
+        fpr, tpr, _ = roc_curve(y_true, y_scores)
+        roc_auc = auc(fpr, tpr)
+        plt.plot(fpr, tpr, lw=2, color=color, label=f"{label} (AUC = {roc_auc:.3f})")
+
+    plt.plot([0,1], [0,1], color='lightgray', lw=2, linestyle='--', label='Random Guess')
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.title('Train, Validation, Test ROC Curve')
+    plt.legend(loc="lower right")
+    plt.grid(alpha=0.3)
     plt.show()
 
 def plot_accuracy_vs_threshold(thresholds: np.ndarray, accuracies: np.ndarray, best_acc: np.float64, best_t: np.float64) -> None:
@@ -254,21 +271,8 @@ plot_training_history(evals_result)
 # 'gain' is the most important metric for interpreting feature contribution
 plot_feature_importance(model, "gain", 10)
 
-# Plotting the ROC AUC
-y_probs = model.predict(dtest)
-fpr, tpr, thresholds = roc_curve(y_test, y_probs)
-roc_auc = auc(fpr, tpr)
-plt.figure(figsize=(8, 8))
-plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (area = {roc_auc:.2f})')
-plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--', label='Random Guess')
-plt.xlim([0.0, 1.0])
-plt.ylim([0.0, 1.05])
-plt.xlabel('False Positive Rate (1 - Specificity)')
-plt.ylabel('True Positive Rate (Sensitivity)')
-plt.title('AFL Win Predictor: ROC Curve (Test Set)')
-plt.legend(loc="lower right")
-plt.grid(alpha=0.3)
-plt.show()
+# Plot ROC AUC
+plot_train_val_test_auc([dtrain, dval, dtest], [y_train, y_val, y_test])
 
 # Precision-Recall values
 # Get predicted probabilities
