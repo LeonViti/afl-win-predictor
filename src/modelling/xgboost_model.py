@@ -129,7 +129,7 @@ def plot_feature_importance(
     plt.grid(alpha=1, axis='x', zorder=1)
     plt.show()
 
-def plot_train_val_test_auc(dmats:list[xgb.DMatrix], ys:list[pl.Series]) -> None:
+def plot_train_val_test_auc(model, dmats:list[xgb.DMatrix], ys:list[pl.Series]) -> None:
     """
     Plot the ROC AUC for the models performance on the train, validation, and test sets. 
 
@@ -376,6 +376,7 @@ for i in fold_indices:
 # for idx, (tr, val) in enumerate(walk_folds):
 #     print(f"Fold {idx+1}: train years = {tr['year'].unique().to_list()}, val year = {val['year'].unique().to_list()}")
 
+# TODO: add threshold selection to the pipeline
 def objective(trial):
     # Suggest hyperparameters
     params = {
@@ -406,7 +407,7 @@ def objective(trial):
 
         # Convert to DMatrix
         dtrain = xgb.DMatrix(X_train, label=y_train, enable_categorical=True)
-        dval   = xgb.DMatrix(X_val, label=y_val, enable_categorical=True)
+        dval = xgb.DMatrix(X_val, label=y_val, enable_categorical=True)
 
         evals_result = {}
         model = xgb.train(
@@ -427,7 +428,7 @@ def objective(trial):
     # Mean AUC across folds is the single Optuna objective
     mean_auc = np.mean(fold_aucs)
 
-    # Log trial in MLflow (only mean AUC)
+    # Log trial in MLflow 
     with mlflow.start_run(nested=True):
         mlflow.log_params(params)
         mlflow.log_metric("mean_val_auc", mean_auc)
@@ -437,14 +438,14 @@ def objective(trial):
         # Log final model of last fold for reference
         mlflow.xgboost.log_model(
             xgb_model=model,
-            name="afl_xgb_model_last_fold",
+            name="afl_xgb_model_last_fold_2",
         )
 
     return mean_auc  # Optuna maximizes this
 
 # Create the study and optimize
 study = optuna.create_study(direction="maximize")
-study.optimize(objective, n_trials=20, n_jobs=1)  # n_trials can be larger
+study.optimize(objective, n_trials=100, n_jobs=1)  # n_trials can be larger
 
 # Best trial
 best_trial = study.best_trial
@@ -452,15 +453,39 @@ print("Best validation AUC:", best_trial.value)
 print("Best hyperparameters:", best_trial.params)
 
 # Path to the model in the run
-model_uri = "runs:/0c5b080bac5a4b58a06b1fcb6c26a1d6/afl_xgb_model"
+model_uri = "runs:/3371369b49f446459aec2de815d563e0/afl_xgb_model_last_fold_2"
 
 loaded_model = mlflow.xgboost.load_model(model_uri)
 
-# Use it for predictions
-y_probs = loaded_model.predict(dtest)
+# PLOT THE BASE TEST CONFUSION MATRIX
+plot_confusion_matrix(loaded_model, dtest, y_test, "Test")
 
-# plot thresholds vs accuracies
-plot_accuracy_vs_threshold(loaded_model, dval, y_val)
+# Plotting the feature importance
+# 'gain' is the most important metric for interpreting feature contribution
+plot_feature_importance(loaded_model, "gain", 10)
 
-# CM WITH THRESHOLD
-plot_cm_with_threshold(loaded_model, dval, y_val, dtest, y_test)
+# Plot ROC AUC for all three sets
+plot_train_val_test_auc(loaded_model, [dtrain, dval, dtest], [y_train, y_val, y_test])
+
+# Plot Precision-Recall 
+plot_precision_recall(loaded_model, dval, y_val, "Validation")
+plot_precision_recall(loaded_model, dtest, y_test, "Test")
+
+# predict accuracy values for differing thresholds and get the best threshold
+y_scores = model.predict(dval) 
+thresholds = np.linspace(0, 1, 200)
+accuracies = []
+for t in thresholds:
+    y_pred = (y_scores >= t).astype(int)
+    acc = accuracy_score(y_val, y_pred)
+    accuracies.append(acc)
+accuracies = np.array(accuracies)
+best_idx = np.argmax(accuracies)
+best_t = thresholds[best_idx]
+best_acc = accuracies[best_idx]
+
+# plot the accuracy vs threshold to select the threshold to maximise accuracy 
+plot_accuracy_vs_threshold(thresholds, accuracies, best_acc, best_t)
+
+# plot the confusion matrix with the best threshold set
+plot_confusion_matrix(model, dtest, y_test, "BT Test", best_t)
