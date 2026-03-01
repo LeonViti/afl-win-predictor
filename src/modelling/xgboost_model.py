@@ -276,30 +276,6 @@ model = xgb.train(
     evals_result=evals_result
 )
 
-# NOTE: below uncommented code is for hyperparam tuning. 
-# Run CV (for hyperparameter tuning)
-# cv_results = xgb.cv(
-#     params=params,
-#     dtrain=dtrain,
-#     num_boost_round=2000,
-#     nfold=5,
-#     metrics="auc",
-#     early_stopping_rounds=100,
-#     seed=42,
-#     verbose_eval=50,  # prints progress
-#     as_pandas=True
-# )
-
-# Train final model using best number of rounds
-# model = xgb.train(
-#     params,
-#     dtrain,
-#     num_boost_round=best_nrounds,
-#     evals=[(dtrain, "train"), (dval, "validation")],
-#     early_stopping_rounds=20,
-#     evals_result=evals_result
-# )
-
 # PLOT THE BASE TEST CONFUSION MATRIX
 plot_confusion_matrix(model, dtest, y_test, "Test")
 
@@ -369,7 +345,9 @@ for i in fold_indices:
     train_seasons = seasons[:i]
     val_season = seasons[i]
     train_df = cv_df.filter(pl.col("year").is_in(train_seasons))
-    val_df   = cv_df.filter(pl.col("year") == val_season)
+    val_df = cv_df.filter(pl.col("year") == val_season)
+    train_df = train_df.drop(["year"])
+    val_df = val_df.drop(["year"])
     walk_folds.append((train_df, val_df))
 
 # # Check fold years
@@ -397,7 +375,7 @@ def objective(trial):
     # Walk-forward CV
     for fold_idx, (train_df, val_df) in enumerate(walk_folds):
         X_train, y_train = train_df.drop("win"), train_df["win"]
-        X_val, y_val     = val_df.drop("win"), val_df["win"]
+        X_val, y_val = val_df.drop("win"), val_df["win"]
 
         # Handle class imbalance
         y_train_np = y_train.to_numpy()
@@ -438,14 +416,14 @@ def objective(trial):
         # Log final model of last fold for reference
         mlflow.xgboost.log_model(
             xgb_model=model,
-            name="afl_xgb_model_last_fold_2",
+            name="afl_xgb_model_last_fold_5",
         )
 
     return mean_auc  # Optuna maximizes this
 
 # Create the study and optimize
 study = optuna.create_study(direction="maximize")
-study.optimize(objective, n_trials=100, n_jobs=1)  # n_trials can be larger
+study.optimize(objective, n_trials=20, n_jobs=-1)  # n_trials can be larger
 
 # Best trial
 best_trial = study.best_trial
@@ -453,7 +431,7 @@ print("Best validation AUC:", best_trial.value)
 print("Best hyperparameters:", best_trial.params)
 
 # Path to the model in the run
-model_uri = "runs:/3371369b49f446459aec2de815d563e0/afl_xgb_model_last_fold_2"
+model_uri = "runs:/66ae62b956fc49778e7602575598039b/afl_xgb_model_last_fold_5"
 
 loaded_model = mlflow.xgboost.load_model(model_uri)
 
@@ -489,3 +467,14 @@ plot_accuracy_vs_threshold(thresholds, accuracies, best_acc, best_t)
 
 # plot the confusion matrix with the best threshold set
 plot_confusion_matrix(model, dtest, y_test, "BT Test", best_t)
+
+# delete mlflow runs
+# Get the experiment ID
+exp = mlflow.get_experiment_by_name("afl_win_predictor")
+experiment_id = exp.experiment_id
+
+# Delete all runs
+for run_info in mlflow.list_run_infos(experiment_id):
+    mlflow.delete_run(run_info.run_id)
+
+print("All runs deleted for experiment:", experiment_id)
