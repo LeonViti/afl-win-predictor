@@ -130,12 +130,17 @@ def plot_feature_importance(
     plt.show()
 
 def plot_train_val_test_auc(dmats:list[xgb.DMatrix], ys:list[pl.Series]) -> None:
+    """
+    Plot the ROC AUC for the models performance on the train, validation, and test sets. 
+
+    Args:
+        dmats: list of dmatrices for train, val, and test ([dtrain, dval, dtest])
+        ys: True labels for the train, val, and test sets. E.g. y_test, y_val, y_train. 
+    """
     plt.figure(figsize=(8,8))
 
     colors = ["mediumpurple", "darkorchid", "rebeccapurple"]  # shades of purple
     labels = ["Train", "Validation", "Test"]
-    # dmats = [dtrain, dval, dtest]
-    # ys = [y_train, y_val, y_test]
 
     for y_true, y_scores, label, color in zip(ys, [model.predict(d) for d in dmats], labels, colors):
         fpr, tpr, _ = roc_curve(y_true, y_scores)
@@ -147,6 +152,31 @@ def plot_train_val_test_auc(dmats:list[xgb.DMatrix], ys:list[pl.Series]) -> None
     plt.ylabel('True Positive Rate')
     plt.title('Train, Validation, Test ROC Curve')
     plt.legend(loc="lower right")
+    plt.grid(alpha=0.3)
+    plt.show()
+
+def plot_precision_recall(model: xgb.Booster, dmatrix: xgb.DMatrix, y:pl.Series) -> None:
+    """
+    Plots the precision recall curve of a model. 
+
+    Args:
+        model: model with a .predict method.
+        dmatrix: Dmatrix dataframe. E.g. dtest, dval, dtrain. 
+        y: True labels for the set of interest. E.g. y_test, y_val, y_train. 
+    """
+    # Get predicted probabilities
+    y_scores = model.predict(dmatrix)  # already probabilities!
+    precision, recall, thresholds = precision_recall_curve(y, y_scores)
+    ap_score = average_precision_score(y, y_scores)
+
+    # Plot (single plot, no custom colors)
+    plt.figure()
+    plt.plot(recall, precision)
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel("Recall")
+    plt.ylabel("Precision")
+    plt.title(f"Precision-Recall Curve (Avg. Precision = {ap_score:.3f})")
     plt.grid(alpha=0.3)
     plt.show()
 
@@ -271,24 +301,11 @@ plot_training_history(evals_result)
 # 'gain' is the most important metric for interpreting feature contribution
 plot_feature_importance(model, "gain", 10)
 
-# Plot ROC AUC
+# Plot ROC AUC for all three sets
 plot_train_val_test_auc([dtrain, dval, dtest], [y_train, y_val, y_test])
 
-# Precision-Recall values
-# Get predicted probabilities
-y_scores = model.predict(dval)  # already probabilities!
-precision, recall, thresholds = precision_recall_curve(y_val, y_scores)
-ap_score = average_precision_score(y_val, y_scores)
-# Plot (single plot, no custom colors)
-plt.figure()
-plt.plot(recall, precision)
-plt.xlim([0.0, 1.0])
-plt.ylim([0.0, 1.05])
-plt.xlabel("Recall")
-plt.ylabel("Precision")
-plt.title(f"Precision-Recall Curve (Avg. Precision = {ap_score:.3f})")
-plt.grid(alpha=0.3)
-plt.show()
+# Plot Precision-Recall 
+plot_precision_recall(model, dval, y_val)
 
 ###############################
 # POST THRESHOLD ADJUSTMENT
@@ -313,7 +330,9 @@ plot_accuracy_vs_threshold(thresholds, accuracies, best_acc, best_t)
 # plot the confusion matrix with the best threshold set
 plot_confusion_matrix(model, dtest, y_test, "BT Test", best_t)
 
+#############
 # mlflow
+#############
 mlflow.set_experiment("afl_win_predictor")
 
 with mlflow.start_run(run_name="xgb_train"):
