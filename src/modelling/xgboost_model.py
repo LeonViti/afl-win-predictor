@@ -155,7 +155,12 @@ def plot_train_val_test_auc(dmats:list[xgb.DMatrix], ys:list[pl.Series]) -> None
     plt.grid(alpha=0.3)
     plt.show()
 
-def plot_precision_recall(model: xgb.Booster, dmatrix: xgb.DMatrix, y:pl.Series) -> None:
+def plot_precision_recall(
+    model: xgb.Booster, 
+    dmatrix: xgb.DMatrix,
+    y:pl.Series, 
+    set_name: Optional[str] = ""
+) -> None:
     """
     Plots the precision recall curve of a model. 
 
@@ -164,19 +169,19 @@ def plot_precision_recall(model: xgb.Booster, dmatrix: xgb.DMatrix, y:pl.Series)
         dmatrix: Dmatrix dataframe. E.g. dtest, dval, dtrain. 
         y: True labels for the set of interest. E.g. y_test, y_val, y_train. 
     """
-    # Get predicted probabilities
-    y_scores = model.predict(dmatrix)  # already probabilities!
+    # get predicted probabilities
+    y_scores = model.predict(dmatrix) 
     precision, recall, thresholds = precision_recall_curve(y, y_scores)
     ap_score = average_precision_score(y, y_scores)
 
-    # Plot (single plot, no custom colors)
-    plt.figure()
-    plt.plot(recall, precision)
+    # Plot 
+    plt.figure(figsize=(6,5))
+    plt.plot(recall, precision, color="darkorchid")
     plt.xlim([0.0, 1.0])
     plt.ylim([0.0, 1.05])
     plt.xlabel("Recall")
     plt.ylabel("Precision")
-    plt.title(f"Precision-Recall Curve (Avg. Precision = {ap_score:.3f})")
+    plt.title(f"{set_name} Precision-Recall Curve (Avg. Precision = {ap_score:.3f})")
     plt.grid(alpha=0.3)
     plt.show()
 
@@ -305,7 +310,8 @@ plot_feature_importance(model, "gain", 10)
 plot_train_val_test_auc([dtrain, dval, dtest], [y_train, y_val, y_test])
 
 # Plot Precision-Recall 
-plot_precision_recall(model, dval, y_val)
+plot_precision_recall(model, dval, y_val, "Validation")
+plot_precision_recall(model, dtest, y_test, "Test")
 
 ###############################
 # POST THRESHOLD ADJUSTMENT
