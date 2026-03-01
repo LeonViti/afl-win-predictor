@@ -3,6 +3,7 @@ import os
 os.chdir(r"C:\Users\leon_\Documents\personal_projects\afl-win-predictor")
 
 # Libraries
+import optuna
 import mlflow
 import mlflow.xgboost
 import numpy as np
@@ -13,7 +14,7 @@ from typing import Optional
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, roc_curve, auc
 from sklearn.metrics import precision_recall_curve, average_precision_score
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, roc_auc_score
 
 from src.config import PROJECT_ROOT
 from src.features.fixture_features import compute_fixture_features
@@ -235,6 +236,7 @@ df_clean = df_clean.with_columns(
 )
 
 # This works, but converts to NumPy internally
+# TODO: move single run example elsewhere
 # train_df, dummy_df = train_test_split(df_clean, test_size=0.3, random_state=42)
 # val_df, test_df = train_test_split(dummy_df, test_size=0.5, random_state=42)
 # Separate final test season
@@ -318,16 +320,8 @@ plot_accuracy_vs_threshold(thresholds, accuracies, best_acc, best_t)
 plot_confusion_matrix(model, dtest, y_test, "BT Test", best_t)
 
 ############
-# mlfow 3
+# mlfow 
 ############
-import optuna
-import mlflow
-import mlflow.xgboost
-import xgboost as xgb
-from sklearn.metrics import roc_auc_score
-import matplotlib.pyplot as plt
-import numpy as np
-
 mlflow.set_experiment("afl_win_predictor")
 
 # --- WALK-FORWARD FOLDS SETUP ---
@@ -421,6 +415,8 @@ def objective(trial):
         )
 
     return mean_auc  # Optuna maximizes this
+
+# TODO: create optuna plots in mlflow
 
 # Create the study and optimize
 study = optuna.create_study(direction="maximize")
