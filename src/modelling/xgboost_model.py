@@ -340,6 +340,152 @@ plot_accuracy_vs_threshold(thresholds, accuracies, best_acc, best_t)
 # plot the confusion matrix with the best threshold set
 plot_confusion_matrix(model, dtest, y_test, "BT Test", best_t)
 
+############
+# mlflow  2 
+############
+import optuna
+import mlflow
+import mlflow.xgboost
+import xgboost as xgb
+from sklearn.metrics import roc_auc_score
+import matplotlib.pyplot as plt
+import numpy as np
+
+mlflow.set_experiment("afl_win_predictor")
+
+# Assume walk_folds is a list of tuples: [(train_df, val_df), ...]
+# Also assume scale_pos_weight calculated per fold
+# Ensure all categorical columns are numeric or encoded safely
+
+import optuna
+import mlflow
+import mlflow.xgboost
+import xgboost as xgb
+from sklearn.metrics import roc_auc_score
+import matplotlib.pyplot as plt
+import numpy as np
+
+mlflow.set_experiment("afl_win_predictor")
+
+# Separate final test season 
+test_df = df_clean.filter(pl.col("year") == 2025) 
+# All earlier seasons used for walk-forward 
+cv_df = df_clean.filter((pl.col("year") < 2025) & (pl.col("year") > 2013))
+cv_df = df_clean.filter((pl.col("year") < 2025))
+seasons = sorted(cv_df["year"].unique()) 
+
+# Drop columns not needed for training
+cv_df = cv_df.drop(['round', 'year'])
+
+# Build walk-forward folds
+walk_folds = []
+for i in range(3, len(seasons)):
+    train_seasons = seasons[:i]
+    val_season = seasons[i]
+    train_df = cv_df.filter(pl.col("year").is_in(train_seasons))
+    val_df = cv_df.filter(pl.col("year") == val_season)
+    walk_folds.append((train_df, val_df))
+
+def objective(trial):
+    # Suggest hyperparameters
+    params = {
+        "objective": "binary:logistic",
+        "eval_metric": "auc",
+        "seed": 42,
+        "device": "cpu",
+        "max_depth": trial.suggest_int("max_depth", 3, 10),
+        "learning_rate": trial.suggest_loguniform("learning_rate", 0.01, 0.3),
+        "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
+        "subsample": trial.suggest_uniform("subsample", 0.5, 1.0),
+        "colsample_bytree": trial.suggest_uniform("colsample_bytree", 0.5, 1.0),
+        "gamma": trial.suggest_uniform("gamma", 0.0, 5.0)
+    }
+
+    fold_aucs = []
+
+    for fold_idx, (train_df, val_df) in enumerate(walk_folds):
+        # Extract X and y
+        X_train = train_df.drop("win")
+        y_train = train_df["win"]
+        X_val   = val_df.drop("win")
+        y_val   = val_df["win"]
+
+        # Align categorical features
+        cat_cols = [c for c, t in X_train.schema.items() if t == pl.Categorical]
+        for c in cat_cols:
+            X_val = X_val.with_columns(
+                pl.col(c).cast(pl.Categorical).cat.set_categories(X_train[c].unique())
+            )
+
+        # Compute scale_pos_weight for imbalance
+        y_train_np = y_train.to_numpy()
+        pos = (y_train_np == 1).sum()
+        neg = (y_train_np == 0).sum()
+        params["scale_pos_weight"] = neg / pos
+
+        # Convert to DMatrix
+        dtrain = xgb.DMatrix(X_train, label=y_train, enable_categorical=True)
+        dval   = xgb.DMatrix(X_val, label=y_val, enable_categorical=True)
+
+        evals_result = {}
+        model = xgb.train(
+            params,
+            dtrain,
+            num_boost_round=2000,
+            evals=[(dtrain, "train"), (dval, "validation")],
+            early_stopping_rounds=20,
+            verbose_eval=False,
+            evals_result=evals_result
+        )
+
+        # Compute fold AUC
+        y_val_pred = model.predict(dval)
+        fold_auc = roc_auc_score(y_val, y_val_pred)
+        fold_aucs.append(fold_auc)
+
+        # Log fold in MLflow
+        with mlflow.start_run(nested=True):
+            mlflow.log_params(params)
+            mlflow.log_metric("val_auc_fold", fold_auc)
+            mlflow.log_metric("best_iteration", model.best_iteration + 1)
+
+            # Save training history plot
+            train_auc = evals_result['train']['auc']
+            val_auc_history = evals_result['validation']['auc']
+            epochs = range(len(train_auc))
+            plt.figure(figsize=(8,6))
+            plt.plot(epochs, train_auc, label='Train AUC')
+            plt.plot(epochs, val_auc_history, label='Validation AUC')
+            plt.axvline(model.best_iteration, color='red', linestyle='--', label='Best Iteration')
+            plt.title(f"Training History Fold {fold_idx+1}")
+            plt.xlabel("Iteration")
+            plt.ylabel("AUC")
+            plt.legend()
+            plt.grid(True)
+            # plt.savefig(f"training_history_fold_{fold_idx+1}.png")
+            mlflow.log_artifact(f"training_history_fold_{fold_idx+1}.png")
+            plt.close()
+
+            # Log XGBoost model for this fold
+            mlflow.xgboost.log_model(
+                xgb_model=model,
+                name=f"afl_xgb_model_fold_{fold_idx+1}",
+            )
+
+    # Return the mean AUC across folds as the objective
+    mean_auc = np.mean(fold_aucs)
+    return mean_auc
+
+# Create study and optimize
+study = optuna.create_study(direction="maximize")
+study.optimize(objective, n_trials=20, n_jobs=-1)
+
+# Best trial
+best_trial = study.best_trial
+print("Best mean validation AUC across folds:", best_trial.value)
+print("Best hyperparameters:", best_trial.params)
+
+
 #############
 # mlflow
 #############
