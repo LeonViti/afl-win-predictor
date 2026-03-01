@@ -226,7 +226,7 @@ df_clean = df_clean.select(['ateam', 'ateamid', 'hteam', 'hteamid', 'is_final', 
                       'hlast5_win_rate', 'alast5_win_rate', 'win'])
 
 
-df_clean = df_clean.drop(['ateamid', 'hteamid', 'winner', 'year', 'localtime_dt'])
+df_clean = df_clean.drop(['ateamid', 'hteamid', 'winner', 'localtime_dt'])
 
 # convert to categorical for xgboost dmatrix support
 df_clean = df_clean.with_columns(
@@ -234,8 +234,12 @@ df_clean = df_clean.with_columns(
 )
 
 # This works, but converts to NumPy internally
-train_df, dummy_df = train_test_split(df_clean, test_size=0.3, random_state=42)
-val_df, test_df = train_test_split(dummy_df, test_size=0.5, random_state=42)
+# train_df, dummy_df = train_test_split(df_clean, test_size=0.3, random_state=42)
+# val_df, test_df = train_test_split(dummy_df, test_size=0.5, random_state=42)
+# Separate final test season
+test_df = df_clean.filter(pl.col("year") == 2025)
+val_df = df_clean.filter(pl.col("year") == 2024)
+train_df = df_clean.filter(pl.col("year") < 2024)
 
 # perform splits for X and y
 X_train, X_val, X_test = train_df.drop("win"), val_df.drop("win"), test_df.drop("win")
