@@ -217,6 +217,7 @@ def plot_accuracy_vs_threshold(thresholds: np.ndarray, accuracies: np.ndarray, b
 path = PROJECT_ROOT / 'data/complete_datasets/squiggle_fixture_all_seasons.parquet'
 df = compute_fixture_features(path)
 
+# TODO: turn this into a function 
 df_clean = df.with_columns([ # greate column to indicate a win 
    (pl.col("hscore") > pl.col("ascore")).cast(pl.Int8).alias("win")
 ])
