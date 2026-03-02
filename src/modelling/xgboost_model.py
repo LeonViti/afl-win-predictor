@@ -461,12 +461,14 @@ def objective(trial):
         dtrain = xgb.DMatrix(X_train, label=y_train, weight=w_train, enable_categorical=True)
         dval = xgb.DMatrix(X_val, label=y_val, weight=w_val, enable_categorical=True)
 
+        evals_result = {}
         model = xgb.train(
             params,
             dtrain,
             num_boost_round=2000,
             evals=[(dtrain, "train"), (dval, "validation")],
             early_stopping_rounds=50,
+            evals_result=evals_result,
             verbose_eval=False,
         )
 
@@ -483,6 +485,10 @@ def objective(trial):
         mlflow.log_metric("num_folds", len(walk_folds))
         mlflow.log_metric("mean_best_num_boost_rounds", mean_best_rounds)
 
+        # plot the training history ofthe last run
+        # fig = plot_training_history(evals_result)
+        # mlflow.log_artifact(fig, "training_history_last_fold.png")
+
         # log last fold model only as reference
         mlflow.xgboost.log_model(
             xgb_model=model,
@@ -496,13 +502,14 @@ def objective(trial):
 # Create the study and optimize
 study = optuna.create_study(direction="maximize")
 study.optimize(objective, n_trials=20, n_jobs=-1)  # n_trials can be larger
-
 # Best trial
 best_trial = study.best_trial
 print("Best validation AUC:", best_trial.value)
 print("Best hyperparameters:", best_trial.params)
 
-# Path to the model in the run
+# TODO: evaluate hyperparameter tuning with Optuna
+
+# LOAD BEST MODEL AND EVALUATE PERFORMANCE TODO: consider turning this section to evaluate.py
 model_uri = "runs:/66ae62b956fc49778e7602575598039b/afl_xgb_model_last_fold_5"
 
 loaded_model = mlflow.xgboost.load_model(model_uri)
