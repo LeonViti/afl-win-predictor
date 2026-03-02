@@ -219,7 +219,10 @@ path = PROJECT_ROOT / 'data/complete_datasets/squiggle_fixture_all_seasons.parqu
 df = compute_fixture_features(path)
 
 # TODO: turn this into a function 
-df_clean = df.with_columns([ # greate column to indicate a win 
+# filter to year afl started (1990)
+df_clean = df.filter(pl.col("year") > 1990)
+
+df_clean = df_clean.with_columns([ # greate column to indicate a win 
    (pl.col("hscore") > pl.col("ascore")).cast(pl.Int8).alias("win")
 ])
 
@@ -230,28 +233,45 @@ df_clean = df_clean.select(['ateam', 'ateamid', 'hteam', 'hteamid', 'is_final', 
 
 df_clean = df_clean.drop(['ateamid', 'hteamid', 'winner', 'localtime_dt'])
 
-# convert to categorical for xgboost dmatrix support
+# create a dummy row and ensure it is assigned a weight of zero when training
+cat_cols = ["ateam", "hteam", "venue_location"]
+dummy = (
+    df_clean.head(1)
+    .with_columns([pl.lit("UNK").alias(c) for c in cat_cols])
+    .with_columns(pl.lit(0.0).alias("weight"))  # zero weight
+)
+
+# Add weight=1 for all real rows
 df_clean = df_clean.with_columns(
+    pl.lit(1.0).alias("weight")
+)
+
+# Append dummy
+df_clean = df_clean.vstack(dummy)
+
+# convert to categorical for xgboost dmatrix support
+df_model = df_clean.with_columns(
     pl.col(pl.String).cast(pl.Categorical)
 )
 
 # This works, but converts to NumPy internally
 # TODO: move single run example elsewhere
-# train_df, dummy_df = train_test_split(df_clean, test_size=0.3, random_state=42)
+# train_df, dummy_df = train_test_split(df_model, test_size=0.3, random_state=42)
 # val_df, test_df = train_test_split(dummy_df, test_size=0.5, random_state=42)
 # Separate final test season
-test_df = df_clean.filter(pl.col("year") == 2025)
-val_df = df_clean.filter(pl.col("year") == 2024)
-train_df = df_clean.filter(pl.col("year") < 2024)
+test_df = df_model.filter(pl.col("year") == 2025)
+val_df = df_model.filter(pl.col("year") == 2024)
+train_df = df_model.filter(pl.col("year") < 2023)
 
-# perform splits for X and y
-X_train, X_val, X_test = train_df.drop("win"), val_df.drop("win"), test_df.drop("win")
+# perform splits for X and y and assign weights
+X_train, X_val, X_test = train_df.drop(["win", "weight", "year"]), val_df.drop(["win", "weight", "year"]), test_df.drop(["win", "weight", "year"])
 y_train, y_val, y_test = train_df["win"], val_df["win"], test_df["win"]
+w_train, w_val, w_test = train_df["weight"], val_df["weight"], test_df["weight"]
 
 # Convert to XGBoost DMatrix form
-dtrain = xgb.DMatrix(X_train, label=y_train, enable_categorical=True)
-dval = xgb.DMatrix(X_val, label=y_val, enable_categorical=True)
-dtest = xgb.DMatrix(X_test, label=y_test, enable_categorical=True)
+dtrain = xgb.DMatrix(X_train, label=y_train, weight=w_train, enable_categorical=True)
+dval = xgb.DMatrix(X_val, label=y_val, weight=w_val, enable_categorical=True)
+dtest = xgb.DMatrix(X_test, label=y_test, weight=w_test, enable_categorical=True)
 
 y_train_np = y_train.to_numpy()
 pos = (y_train_np == 1).sum()
@@ -290,7 +310,7 @@ plot_training_history(evals_result)
 plot_feature_importance(model, "gain", 10)
 
 # Plot ROC AUC for all three sets
-plot_train_val_test_auc([dtrain, dval, dtest], [y_train, y_val, y_test])
+plot_train_val_test_auc(model, [dtrain, dval, dtest], [y_train, y_val, y_test])
 
 # Plot Precision-Recall 
 plot_precision_recall(model, dval, y_val, "Validation")
@@ -326,10 +346,10 @@ mlflow.set_experiment("afl_win_predictor")
 
 # --- WALK-FORWARD FOLDS SETUP ---
 # Separate final test season
-test_df = df_clean.filter(pl.col("year") == 2025)
+test_df = df_model.filter(pl.col("year") == 2025)
 
 # Historical seasons for CV
-cv_df = df_clean.filter(pl.col("year") < 2025)
+cv_df = df_model.filter(pl.col("year") < 2025)
 seasons = sorted(cv_df["year"].unique())
 
 # Pick 10 folds spaced evenly across the years (adjust as needed)
