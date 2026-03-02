@@ -211,6 +211,82 @@ def plot_accuracy_vs_threshold(thresholds: np.ndarray, accuracies: np.ndarray, b
     print("Best threshold:", best_t)
     print("Best accuracy:", best_acc)
 
+def prepare_features(df: pl.DataFrame, cat_cols: list[str]) -> pl.DataFrame:
+    """
+    Prepares features for modelling. Also builds a dummy row with weight 0.
+
+    Args:
+        df: polars dataframe from compute_fixture_features()
+        cat_cols: list of categorical columns
+    """
+    # filter to year afl started (1990)
+    df_clean = df.filter(pl.col("year") > 1990)
+
+    df_clean = df_clean.with_columns([ # greate column to indicate a win 
+    (pl.col("hscore") > pl.col("ascore")).cast(pl.Int8).alias("win")
+    ])
+
+    df_clean = df_clean.select(['ateam', 'ateamid', 'hteam', 'hteamid', 'is_final', 'is_grand_final', 'localtime_dt',
+                        'round', 'winner', 'year', 'venue_location', 'tz_shift_advantage',
+                        'hlast5_win_rate', 'alast5_win_rate', 'win'])
+
+
+    df_clean = df_clean.drop(['ateamid', 'hteamid', 'winner', 'localtime_dt'])
+
+    # create a dummy row and ensure it is assigned a weight of zero when training
+    dummy = (
+        df_clean.head(1)
+        .with_columns([pl.lit("UNK").alias(c) for c in cat_cols])
+        .with_columns(pl.lit(0.0).alias("weight"))  # zero weight
+    )
+
+    # Add weight=1 for all real rows
+    df_clean = df_clean.with_columns(
+        pl.lit(1.0).alias("weight")
+    )
+
+    # Append dummy
+    df_clean = df_clean.vstack(dummy)
+
+    # convert to categorical for xgboost dmatrix support
+    df_model = df_clean.with_columns(
+        pl.col(pl.String).cast(pl.Categorical)
+    )
+    return df_model
+
+def handle_unseen_categories(
+    train_df: pl.DataFrame,
+    val_df: pl.DataFrame,
+    cat_cols,
+    unk_token: str = "UNK"
+) -> pl.DataFrame:
+    """
+    Replace category values in val_df that do not appear in train_df with unk_token
+
+    Args
+        train_df: training df
+        val_df: validation df
+        cat_cols: list of categorical column names
+        unk_token: replacement value for unseen categories
+
+    Returns
+        Updated val_df with unseen categories mapped to unk_token.
+    """
+    # set this internally for convenience
+
+    for col in cat_cols:
+        train_cats = set(train_df[col].unique().to_list())
+        
+        # check for missing column value in validation set, if missing change to dummy value UNK
+        val_df = val_df.with_columns(
+            pl.when(~pl.col(col).is_in(train_cats))
+            .then(pl.lit(unk_token))
+            .otherwise(pl.col(col))
+            .alias(col)
+        )
+
+    return val_df
+
 #####################
 # Code
 #####################
@@ -218,41 +294,9 @@ def plot_accuracy_vs_threshold(thresholds: np.ndarray, accuracies: np.ndarray, b
 path = PROJECT_ROOT / 'data/complete_datasets/squiggle_fixture_all_seasons.parquet'
 df = compute_fixture_features(path)
 
-# TODO: turn this into a function 
-# filter to year afl started (1990)
-df_clean = df.filter(pl.col("year") > 1990)
-
-df_clean = df_clean.with_columns([ # greate column to indicate a win 
-   (pl.col("hscore") > pl.col("ascore")).cast(pl.Int8).alias("win")
-])
-
-df_clean = df_clean.select(['ateam', 'ateamid', 'hteam', 'hteamid', 'is_final', 'is_grand_final', 'localtime_dt',
-                      'round', 'winner', 'year', 'venue_location', 'tz_shift_advantage',
-                      'hlast5_win_rate', 'alast5_win_rate', 'win'])
-
-
-df_clean = df_clean.drop(['ateamid', 'hteamid', 'winner', 'localtime_dt'])
-
-# create a dummy row and ensure it is assigned a weight of zero when training
+# prepare features
 cat_cols = ["ateam", "hteam", "venue_location"]
-dummy = (
-    df_clean.head(1)
-    .with_columns([pl.lit("UNK").alias(c) for c in cat_cols])
-    .with_columns(pl.lit(0.0).alias("weight"))  # zero weight
-)
-
-# Add weight=1 for all real rows
-df_clean = df_clean.with_columns(
-    pl.lit(1.0).alias("weight")
-)
-
-# Append dummy
-df_clean = df_clean.vstack(dummy)
-
-# convert to categorical for xgboost dmatrix support
-df_model = df_clean.with_columns(
-    pl.col(pl.String).cast(pl.Categorical)
-)
+df_model = prepare_features(df, cat_cols)
 
 # This works, but converts to NumPy internally
 # TODO: move single run example elsewhere
@@ -345,6 +389,10 @@ plot_confusion_matrix(model, dtest, y_test, "BT Test", best_t)
 mlflow.set_experiment("afl_win_predictor")
 
 # --- WALK-FORWARD FOLDS SETUP ---
+# prepare features
+cat_cols = ["ateam", "hteam", "venue_location"]
+df_model = prepare_features(df, cat_cols)
+
 # Separate final test season
 test_df = df_model.filter(pl.col("year") == 2025)
 
@@ -353,7 +401,8 @@ cv_df = df_model.filter(pl.col("year") < 2025)
 seasons = sorted(cv_df["year"].unique())
 
 # Pick 10 folds spaced evenly across the years (adjust as needed)
-fold_indices = np.linspace(3, len(seasons)-1, 10, dtype=int)  # start at 3 to have enough train data
+# fold_indices = np.linspace(3, len(seasons)-1, 20, dtype=int)  # start at 3 to have enough train data
+fold_indices = sorted(set(np.linspace(3, len(seasons)-1, 20).astype(int)))
 walk_folds = []
 
 for i in fold_indices:
@@ -361,80 +410,86 @@ for i in fold_indices:
     val_season = seasons[i]
     train_df = cv_df.filter(pl.col("year").is_in(train_seasons))
     val_df = cv_df.filter(pl.col("year") == val_season)
-    train_df = train_df.drop(["year"])
-    val_df = val_df.drop(["year"])
+    # handle unseen values 
+    val_df = handle_unseen_categories(train_df, val_df, cat_cols, "UNK")
+
+    # if dummy_row is present in the validation set, remove it
+    val_df = val_df.filter(pl.col("weight") == 1.0)
+
     walk_folds.append((train_df, val_df))
 
-# # Check fold years
+# Check fold years
 # for idx, (tr, val) in enumerate(walk_folds):
 #     print(f"Fold {idx+1}: train years = {tr['year'].unique().to_list()}, val year = {val['year'].unique().to_list()}")
 
 # TODO: add threshold selection to the pipeline
 def objective(trial):
-    # Suggest hyperparameters
+
     params = {
         "objective": "binary:logistic",
         "eval_metric": "auc",
         "seed": 42,
         "device": "cpu",
+        "tree_method": "hist",  # recommended
         "max_depth": trial.suggest_int("max_depth", 3, 10),
         "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
         "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
         "subsample": trial.suggest_float("subsample", 0.5, 1.0),
         "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
-        "gamma": trial.suggest_float("gamma", 0.0, 5.0)
+        "gamma": trial.suggest_float("gamma", 0.0, 5.0),
     }
 
     fold_aucs = []
+    best_rounds = []
 
-    # Walk-forward CV
-    for fold_idx, (train_df, val_df) in enumerate(walk_folds):
-        X_train, y_train = train_df.drop("win"), train_df["win"]
-        X_val, y_val = val_df.drop("win"), val_df["win"]
+    for train_df, val_df in walk_folds:
 
-        # Handle class imbalance
-        y_train_np = y_train.to_numpy()
-        pos = (y_train_np == 1).sum()
-        neg = (y_train_np == 0).sum()
+        X_train = train_df.drop(["win", "year", "weight"])
+        y_train = train_df["win"]
+        w_train = train_df["weight"]
+
+        X_val = val_df.drop(["win", "year", "weight"])
+        y_val = val_df["win"]
+        w_val = val_df["weight"]
+
+        # Class imbalance (exclude dummy rows)
+        y_effective = train_df.filter(pl.col("weight") == 1.0)["win"].to_numpy()
+        pos = (y_effective == 1).sum()
+        neg = (y_effective == 0).sum()
         params["scale_pos_weight"] = neg / pos
 
-        # Convert to DMatrix
-        dtrain = xgb.DMatrix(X_train, label=y_train, enable_categorical=True)
-        dval = xgb.DMatrix(X_val, label=y_val, enable_categorical=True)
+        dtrain = xgb.DMatrix(X_train, label=y_train, weight=w_train, enable_categorical=True)
+        dval = xgb.DMatrix(X_val, label=y_val, weight=w_val, enable_categorical=True)
 
-        evals_result = {}
         model = xgb.train(
             params,
             dtrain,
             num_boost_round=2000,
             evals=[(dtrain, "train"), (dval, "validation")],
-            early_stopping_rounds=20,
+            early_stopping_rounds=50,
             verbose_eval=False,
-            evals_result=evals_result
         )
 
-        # Fold AUC for diagnostics
         y_val_pred = model.predict(dval)
-        fold_auc = roc_auc_score(y_val, y_val_pred)
-        fold_aucs.append(fold_auc)
+        fold_aucs.append(roc_auc_score(y_val, y_val_pred))
+        best_rounds.append(model.best_iteration + 1)
 
-    # Mean AUC across folds is the single Optuna objective
-    mean_auc = np.mean(fold_aucs)
+    mean_auc = float(np.mean(fold_aucs))
+    mean_best_rounds = int(np.mean(best_rounds))
 
-    # Log trial in MLflow 
     with mlflow.start_run(nested=True):
         mlflow.log_params(params)
         mlflow.log_metric("mean_val_auc", mean_auc)
         mlflow.log_metric("num_folds", len(walk_folds))
-        mlflow.log_metric("best_num_boost_rounds", model.best_iteration + 1)
+        mlflow.log_metric("mean_best_num_boost_rounds", mean_best_rounds)
 
-        # Log final model of last fold for reference
+        # log last fold model only as reference
         mlflow.xgboost.log_model(
             xgb_model=model,
-            name="afl_xgb_model_last_fold_5",
+            name="afl_xgb_model_last_fold"
         )
 
-    return mean_auc  # Optuna maximizes this
+    return mean_auc
 
 # TODO: create optuna plots in mlflow
 
@@ -451,6 +506,8 @@ print("Best hyperparameters:", best_trial.params)
 model_uri = "runs:/66ae62b956fc49778e7602575598039b/afl_xgb_model_last_fold_5"
 
 loaded_model = mlflow.xgboost.load_model(model_uri)
+
+# NOTE: ensure the dummy row is removed when evaluating
 
 # PLOT THE BASE TEST CONFUSION MATRIX
 plot_confusion_matrix(loaded_model, dtest, y_test, "Test")
