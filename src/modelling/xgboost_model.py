@@ -26,6 +26,37 @@ from src.evaluation.plots import (
 #####################
 # Functions
 #####################
+def create_dummy_row(df: pl.DataFrame, cat_cols: list[str]) -> pl.DataFrame:
+    """
+    Creates a dummy row with weight 0. Changes categorical columns to `UNK` value. 
+
+    Args:
+        df: polars dataframe from compute_fixture_features()
+        cat_cols: list of categorical columns
+    
+    Returns: Polars dataframe with additional dummy row.
+    """
+    # create a dummy row and ensure it is assigned a weight of zero when training
+    dummy = (
+        df.head(1)
+        .with_columns([pl.lit("UNK").alias(c) for c in cat_cols])
+        .with_columns(pl.lit(0.0).alias("weight"))  # zero weight
+    )
+
+    # Add weight=1 for all real rows
+    df = df.with_columns(
+        pl.lit(1.0).alias("weight")
+    )
+
+    # Append dummy
+    df = df.vstack(dummy)
+
+    # convert to categorical for xgboost dmatrix support (in case types change)
+    df_final = df.with_columns(
+        pl.col(pl.String).cast(pl.Categorical)
+    )
+    return df_final
+
 def prepare_features(df: pl.DataFrame, cat_cols: list[str]) -> pl.DataFrame:
     """
     Prepares features for modelling. Also builds a dummy row with weight 0.
@@ -48,20 +79,7 @@ def prepare_features(df: pl.DataFrame, cat_cols: list[str]) -> pl.DataFrame:
 
     df_clean = df_clean.drop(['ateamid', 'hteamid', 'winner', 'localtime_dt'])
 
-    # create a dummy row and ensure it is assigned a weight of zero when training
-    dummy = (
-        df_clean.head(1)
-        .with_columns([pl.lit("UNK").alias(c) for c in cat_cols])
-        .with_columns(pl.lit(0.0).alias("weight"))  # zero weight
-    )
-
-    # Add weight=1 for all real rows
-    df_clean = df_clean.with_columns(
-        pl.lit(1.0).alias("weight")
-    )
-
-    # Append dummy
-    df_clean = df_clean.vstack(dummy)
+    df_clean = create_dummy_row(df_clean, cat_cols)
 
     # convert to categorical for xgboost dmatrix support
     df_model = df_clean.with_columns(
@@ -205,7 +223,7 @@ plot_confusion_matrix(model, dtest, y_test, "BT Test", best_t)
 ############
 mlflow.set_experiment("afl_win_predictor")
 
-# --- WALK-FORWARD FOLDS SETUP ---
+# --- EXPANDING WALK-FORWARD FOLDS SETUP ---
 # prepare features
 cat_cols = ["ateam", "hteam", "venue_location"]
 df_model = prepare_features(df, cat_cols)
@@ -232,6 +250,43 @@ for i in fold_indices:
 
     # if dummy_row is present in the validation set, remove it
     val_df = val_df.filter(pl.col("weight") == 1.0)
+
+    walk_folds.append((train_df, val_df))
+
+# Check fold years
+# for idx, (tr, val) in enumerate(walk_folds):
+#     print(f"Fold {idx+1}: train years = {tr['year'].unique().to_list()}, val year = {val['year'].unique().to_list()}")
+
+# --- ROLLING WALK FORWARD SET-UP ---
+window_size = 5  # number of seasons to train on
+walk_folds = []
+
+# Historical seasons for CV
+cv_df = df_model.filter(pl.col("year") < 2025)
+
+seasons = sorted(
+    cv_df.select("year").unique().to_series().to_list()
+)
+
+for i in range(window_size, len(seasons)):
+    
+    train_seasons = seasons[i - window_size : i]
+    val_season = seasons[i]
+
+    train_df = cv_df.filter(pl.col("year").is_in(train_seasons))
+    
+    val_df = cv_df.filter(
+        (pl.col("year") == val_season) &
+        (pl.col("weight") == 1.0)   # remove dummy row
+    )
+
+    # Handle unseen categorical values
+    val_df = handle_unseen_categories(train_df, val_df, cat_cols, "UNK")
+
+    # Ensure categorical casting is correct
+    val_df = val_df.with_columns(
+        pl.col(pl.Utf8).cast(pl.Categorical)
+    )
 
     walk_folds.append((train_df, val_df))
 
@@ -301,10 +356,6 @@ def objective(trial):
         mlflow.log_metric("mean_val_auc", mean_auc)
         mlflow.log_metric("num_folds", len(walk_folds))
         mlflow.log_metric("mean_best_num_boost_rounds", mean_best_rounds)
-
-        # plot the training history ofthe last run
-        # fig = plot_training_history(evals_result)
-        # mlflow.log_artifact(fig, "training_history_last_fold.png")
 
         # log last fold model only as reference
         mlflow.xgboost.log_model(
