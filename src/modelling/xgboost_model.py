@@ -157,7 +157,12 @@ def plot_train_val_test_auc(model, dmats:list[xgb.DMatrix], ys:list[pl.Series]) 
     plt.grid(alpha=0.3)
     plt.show()
 
-def plot_calibration_curve(model:xgb.Booster, dmatrix:xgb.DMatrix, y:pl.Series) -> None:
+def plot_calibration_curve(
+    model:xgb.Booster, 
+    dmatrix:xgb.DMatrix, 
+    y:pl.Series,
+    set_name: Optional[str] = "",
+) -> None:
     """
     Plot the calibration curve for the model.
 
@@ -174,7 +179,7 @@ def plot_calibration_curve(model:xgb.Booster, dmatrix:xgb.DMatrix, y:pl.Series) 
     plt.plot([0,1],[0,1], linestyle='--', label='Perfectly calibrated')
     plt.xlabel('Predicted probability')
     plt.ylabel('Observed frequency')
-    plt.title('Calibration curve')
+    plt.title(f'{set_name} Calibration curve')
     plt.legend()
     plt.grid(True)
     plt.show()
@@ -382,6 +387,8 @@ plot_train_val_test_auc(model, [dtrain, dval, dtest], [y_train, y_val, y_test])
 # Plot Precision-Recall 
 plot_precision_recall(model, dval, y_val, "Validation")
 plot_precision_recall(model, dtest, y_test, "Test")
+
+plot_calibration_curve(model, dval, y_val, "Validation")
 
 
 
