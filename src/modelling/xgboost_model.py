@@ -258,7 +258,7 @@ for i in fold_indices:
 #     print(f"Fold {idx+1}: train years = {tr['year'].unique().to_list()}, val year = {val['year'].unique().to_list()}")
 
 # --- ROLLING WALK FORWARD SET-UP ---
-window_size = 5  # number of seasons to train on
+window_size = 8  # number of seasons to train on TODO: tune for best window size 
 walk_folds = []
 
 # Historical seasons for CV
