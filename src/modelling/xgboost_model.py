@@ -15,6 +15,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, roc_curve, auc
 from sklearn.metrics import precision_recall_curve, average_precision_score
 from sklearn.metrics import accuracy_score, roc_auc_score
+from sklearn.calibration import calibration_curve
 
 from src.config import PROJECT_ROOT
 from src.features.fixture_features import compute_fixture_features
@@ -154,6 +155,28 @@ def plot_train_val_test_auc(model, dmats:list[xgb.DMatrix], ys:list[pl.Series]) 
     plt.title('Train, Validation, Test ROC Curve')
     plt.legend(loc="lower right")
     plt.grid(alpha=0.3)
+    plt.show()
+
+def plot_calibration_curve(model:xgb.Booster, dmatrix:xgb.DMatrix, y:pl.Series) -> None:
+    """
+    Plot the calibration curve for the model.
+
+    Args:
+        model: Trained XGBoost model.
+        dmatrix: Dmatrix dataframe. E.g. dtest, dval, dtrain. 
+        y: True labels for the set of interest. E.g. y_test, y_val, y_train. 
+    """
+    y_scores = model.predict(dmatrix)
+    prob_true, prob_pred = calibration_curve(y, y_scores, n_bins=10, strategy='uniform')
+
+    plt.figure(figsize=(6,6))
+    plt.plot(prob_pred, prob_true, marker='o', label='Model')
+    plt.plot([0,1],[0,1], linestyle='--', label='Perfectly calibrated')
+    plt.xlabel('Predicted probability')
+    plt.ylabel('Observed frequency')
+    plt.title('Calibration curve')
+    plt.legend()
+    plt.grid(True)
     plt.show()
 
 def plot_precision_recall(
@@ -359,6 +382,8 @@ plot_train_val_test_auc(model, [dtrain, dval, dtest], [y_train, y_val, y_test])
 # Plot Precision-Recall 
 plot_precision_recall(model, dval, y_val, "Validation")
 plot_precision_recall(model, dtest, y_test, "Test")
+
+
 
 ###############################
 # POST THRESHOLD ADJUSTMENT
