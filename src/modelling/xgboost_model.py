@@ -163,6 +163,52 @@ def create_rolling_forward_walk(
 
     return walk_folds
 
+def print_fold_windows(walk_folds:list[tuple[pl.DataFrame, pl.DataFrame]]) -> None:
+    """
+    Print the train and validation years for each fold.
+
+    Args:
+        walk_folds: List of tuples containing (train_df, val_df) for each fold
+    """
+    for idx, (tr, val) in enumerate(walk_folds):
+        print(f"Fold {idx+1}: train years = {tr['year'].unique().to_list()}, val year = {val['year'].unique().to_list()}")
+
+
+def get_best_accuracy_threshold(
+    model: xgb.Booster,
+    dmatrix: xgb.DMatrix,
+    y: pl.Series,
+    n_thresholds: int = 200
+) -> tuple[float, float]:
+    """
+    Find the threshold that gives the highest classification accuracy.
+
+    Args:
+        model: Trained XGBoost booster
+        dmatrix: DMatrix of validation data
+        y: True labels (numpy array)
+        n_thresholds: Number of thresholds to scan between 0 and 1
+
+    Returns:
+        best_threshold: Threshold that maximizes accuracy
+        best_accuracy: Accuracy at that threshold
+    """
+    # convert Polars Series to NumPy array
+    y_np = y.to_numpy()
+
+    y_scores = model.predict(dmatrix)
+    thresholds = np.linspace(0, 1, n_thresholds)
+    
+    # Vectorized computation
+    y_pred_matrix = (y_scores[None, :] >= thresholds[:, None]).astype(int)
+    accuracies = (y_pred_matrix == y_np[None, :]).mean(axis=1)
+    
+    best_idx = np.argmax(accuracies)
+    best_t = thresholds[best_idx]
+    best_acc = accuracies[best_idx]
+
+    return best_t, best_acc
+
 #####################
 # Code
 #####################
@@ -255,6 +301,8 @@ best_idx = np.argmax(accuracies)
 best_t = thresholds[best_idx]
 best_acc = accuracies[best_idx]
 
+get_best_accuracy_threshold(model, dval, y_val)
+
 # plot the accuracy vs threshold to select the threshold to maximise accuracy 
 plot_accuracy_vs_threshold(thresholds, accuracies, best_acc, best_t)
 
@@ -312,15 +360,11 @@ test_df = df_model.filter(pl.col("year") == 2025)
 # get seasons aside from the last season for training
 cv_df = df_model.filter(pl.col("year") < 2025)
 
-# get seasons as a list
-seasons = sorted(cv_df.select("year").unique().to_series().to_list())
-
 # create rolling window walk folds
 walk_folds = create_rolling_forward_walk(cv_df, 5, cat_cols)
 
 # print fold windows
-for idx, (tr, val) in enumerate(walk_folds):
-    print(f"Fold {idx+1}: train years = {tr['year'].unique().to_list()}, val year = {val['year'].unique().to_list()}")
+print_fold_windows(walk_folds)
 
 # TODO: add threshold selection to the pipeline
 def objective(trial):
@@ -341,7 +385,7 @@ def objective(trial):
 
     fold_aucs = []
     best_rounds = []
-    
+
     for train_df, val_df in walk_folds:
 
         X_train = train_df.drop(["win", "year", "weight"])
