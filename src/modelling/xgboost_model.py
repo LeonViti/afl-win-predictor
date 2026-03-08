@@ -9,8 +9,8 @@ import mlflow.xgboost
 import numpy as np
 import polars as pl
 import xgboost as xgb
-from sklearn.metrics import accuracy_score, roc_auc_score
 
+from sklearn.metrics import accuracy_score, roc_auc_score
 from src.config import PROJECT_ROOT
 from src.features.fixture_features import compute_fixture_features
 from src.evaluation.plots import (
@@ -119,6 +119,49 @@ def handle_unseen_categories(
         )
 
     return val_df
+
+def create_rolling_forward_walk(
+    cv_df:pl.DataFrame,
+    window_size:int,
+    cat_cols:list[str]
+) -> list[tuple[pl.DataFrame, pl.DataFrame]]:
+    """
+    Create rolling forward walk-forward cross-validation folds.
+    
+    Args:
+        cv_df: DataFrame containing historical seasons (excluding test)
+        window_size: range of seasons to train on
+        cat_cols: list of categorical columns
+
+    Returns: List of (train_df, val_df) tuples for rolling CV
+    """
+    # get seasons as a list
+    seasons = sorted(cv_df.select("year").unique().to_series().to_list())
+
+    walk_folds = []
+
+    for i in range(window_size, len(seasons)):
+        
+        train_seasons = seasons[i - window_size : i]
+        val_season = seasons[i]
+
+        train_df = cv_df.filter(pl.col("year").is_in(train_seasons))
+        
+        val_df = cv_df.filter(
+            (pl.col("year") == val_season) &
+            (pl.col("weight") == 1.0)   # remove dummy row
+        )
+
+        # Handle unseen categorical values
+        val_df = handle_unseen_categories(train_df, val_df, cat_cols, "UNK")
+
+        # Ensure categorical casting is correct for train and val
+        train_df = train_df.with_columns(pl.col(pl.Utf8).cast(pl.Categorical))
+        val_df = val_df.with_columns(pl.col(pl.Utf8).cast(pl.Categorical))
+
+        walk_folds.append((train_df, val_df))
+
+    return walk_folds
 
 #####################
 # Code
@@ -258,41 +301,26 @@ for i in fold_indices:
 #     print(f"Fold {idx+1}: train years = {tr['year'].unique().to_list()}, val year = {val['year'].unique().to_list()}")
 
 # --- ROLLING WALK FORWARD SET-UP ---
-window_size = 8  # number of seasons to train on TODO: tune for best window size 
-walk_folds = []
+mlflow.set_experiment("afl_win_predictor")
 
-# Historical seasons for CV
+cat_cols = ["ateam", "hteam", "venue_location"]
+df_model = prepare_features(df, cat_cols)
+
+# Separate final test season
+test_df = df_model.filter(pl.col("year") == 2025)
+
+# get seasons aside from the last season for training
 cv_df = df_model.filter(pl.col("year") < 2025)
 
-seasons = sorted(
-    cv_df.select("year").unique().to_series().to_list()
-)
+# get seasons as a list
+seasons = sorted(cv_df.select("year").unique().to_series().to_list())
 
-for i in range(window_size, len(seasons)):
-    
-    train_seasons = seasons[i - window_size : i]
-    val_season = seasons[i]
+# create rolling window walk folds
+walk_folds = create_rolling_forward_walk(cv_df, 5, cat_cols)
 
-    train_df = cv_df.filter(pl.col("year").is_in(train_seasons))
-    
-    val_df = cv_df.filter(
-        (pl.col("year") == val_season) &
-        (pl.col("weight") == 1.0)   # remove dummy row
-    )
-
-    # Handle unseen categorical values
-    val_df = handle_unseen_categories(train_df, val_df, cat_cols, "UNK")
-
-    # Ensure categorical casting is correct
-    val_df = val_df.with_columns(
-        pl.col(pl.Utf8).cast(pl.Categorical)
-    )
-
-    walk_folds.append((train_df, val_df))
-
-# Check fold years
-# for idx, (tr, val) in enumerate(walk_folds):
-#     print(f"Fold {idx+1}: train years = {tr['year'].unique().to_list()}, val year = {val['year'].unique().to_list()}")
+# print fold windows
+for idx, (tr, val) in enumerate(walk_folds):
+    print(f"Fold {idx+1}: train years = {tr['year'].unique().to_list()}, val year = {val['year'].unique().to_list()}")
 
 # TODO: add threshold selection to the pipeline
 def objective(trial):
@@ -313,7 +341,7 @@ def objective(trial):
 
     fold_aucs = []
     best_rounds = []
-
+    
     for train_df, val_df in walk_folds:
 
         X_train = train_df.drop(["win", "year", "weight"])
