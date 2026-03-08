@@ -5,6 +5,7 @@ os.chdir(r"C:\Users\leon_\Documents\personal_projects\afl-win-predictor")
 # Libraries
 import optuna
 import mlflow
+import datetime
 import mlflow.xgboost
 import numpy as np
 import polars as pl
@@ -175,18 +176,16 @@ def print_fold_windows(walk_folds:list[tuple[pl.DataFrame, pl.DataFrame]]) -> No
 
 
 def get_best_accuracy_threshold(
-    model: xgb.Booster,
-    dmatrix: xgb.DMatrix,
     y: pl.Series,
+    y_pred: np.ndarray,
     n_thresholds: int = 200
-) -> tuple[float, float]:
+) -> tuple[np.float64, np.float64]:
     """
     Find the threshold that gives the highest classification accuracy.
 
     Args:
-        model: Trained XGBoost booster
-        dmatrix: DMatrix of validation data
-        y: True labels (numpy array)
+        y: True labels (Polars Series)
+        y_pred: Predicted probabilities (numpy array)
         n_thresholds: Number of thresholds to scan between 0 and 1
 
     Returns:
@@ -196,11 +195,11 @@ def get_best_accuracy_threshold(
     # convert Polars Series to NumPy array
     y_np = y.to_numpy()
 
-    y_scores = model.predict(dmatrix)
+    # select thresholds to check accuracies over
     thresholds = np.linspace(0, 1, n_thresholds)
     
     # Vectorized computation
-    y_pred_matrix = (y_scores[None, :] >= thresholds[:, None]).astype(int)
+    y_pred_matrix = (y_pred[None, :] >= thresholds[:, None]).astype(int)
     accuracies = (y_pred_matrix == y_np[None, :]).mean(axis=1)
     
     best_idx = np.argmax(accuracies)
@@ -208,6 +207,32 @@ def get_best_accuracy_threshold(
     best_acc = accuracies[best_idx]
 
     return best_t, best_acc
+
+def get_best_mlflow_avg_threshold(study, trial_date_code):
+    """
+    trial_date = '20260308_205622'
+    """
+    # Best trial
+    best_trial = study.best_trial
+    print("Best Mean Validation Accuracy:", best_trial.value)
+    print("Best Hyperparameters:", best_trial.params)
+
+    # to get the best avg_threshold from MLflow
+    best_trial_number = best_trial.number  # Optuna best trial number
+
+    # Get the MLflow run corresponding to that trial
+    client = mlflow.tracking.MlflowClient()
+    experiment_id = mlflow.get_experiment_by_name("afl_win_predictor").experiment_id
+
+    runs = client.search_runs(
+        experiment_ids=[experiment_id],
+        filter_string=f"tags.mlflow.runName = 'trial_{best_trial_number}_{trial_date_code}'"
+    )
+
+    best_run = runs[0]  # should be exactly one
+    best_avg_threshold = best_run.data.metrics["mean_val_threshold"]
+
+    return best_avg_threshold
 
 #####################
 # Code
@@ -384,7 +409,9 @@ def objective(trial):
     }
 
     fold_aucs = []
-    best_rounds = []
+    fold_thresholds = []
+    fold_accuracies = []
+    fold_best_rounds = []
 
     for train_df, val_df in walk_folds:
 
@@ -416,86 +443,117 @@ def objective(trial):
             verbose_eval=False,
         )
 
+        # make prediction on the validation set
         y_val_pred = model.predict(dval)
+
+        # append metrics
+        best_t, best_acc = get_best_accuracy_threshold(y_val, y_val_pred)
         fold_aucs.append(roc_auc_score(y_val, y_val_pred))
-        best_rounds.append(model.best_iteration + 1)
+        fold_thresholds.append(best_t)
+        fold_accuracies.append(best_acc)
+        fold_best_rounds.append(model.best_iteration + 1)  # add 1 because best_iteration is zero-indexed
 
+    # calculate mean metrics across folds
     mean_auc = float(np.mean(fold_aucs))
-    mean_best_rounds = int(np.mean(best_rounds))
+    mean_threshold = float(np.mean(fold_thresholds))
+    mean_accuracy = float(np.mean(fold_accuracies))
+    mean_best_rounds = int(np.mean(fold_best_rounds))
 
-    with mlflow.start_run(nested=True):
+    # define unique run name
+    run_name = f"trial_{trial.number}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    with mlflow.start_run(nested=True, run_name=run_name):
         mlflow.log_params(params)
         mlflow.log_metric("mean_val_auc", mean_auc)
-        mlflow.log_metric("num_folds", len(walk_folds))
+        mlflow.log_metric("mean_val_threshold", mean_threshold)
+        mlflow.log_metric("mean_val_accuracy", mean_accuracy)
         mlflow.log_metric("mean_best_num_boost_rounds", mean_best_rounds)
+        mlflow.log_metric("num_folds", len(walk_folds))
 
-        # log last fold model only as reference
-        mlflow.xgboost.log_model(
-            xgb_model=model,
-            name="afl_xgb_model_last_fold"
-        )
+        for i, (auc, acc, t, rounds) in enumerate(zip(fold_aucs, fold_accuracies, fold_thresholds, fold_best_rounds)):
+            mlflow.log_metric(f"fold_{i+1}_auc", auc)
+            mlflow.log_metric(f"fold_{i+1}_accuracy", acc)
+            mlflow.log_metric(f"fold_{i+1}_threshold", t)
+            mlflow.log_metric(f"fold_{i+1}_best_rounds", rounds)
 
-    return mean_auc
+    return mean_accuracy
 
 # TODO: create optuna plots in mlflow
 
 # Create the study and optimize
 study = optuna.create_study(direction="maximize")
 study.optimize(objective, n_trials=20, n_jobs=-1)  # n_trials can be larger
+
 # Best trial
 best_trial = study.best_trial
-print("Best validation AUC:", best_trial.value)
-print("Best hyperparameters:", best_trial.params)
+print("Best Mean Validation Accuracy:", best_trial.value)
+print("Best Hyperparameters:", best_trial.params)
 
-# TODO: evaluate hyperparameter tuning with Optuna
+# get the best avg threshold
+best_avg_threshold = get_best_mlflow_avg_threshold(study, "20260308_205622")
+print("Best Avg Threshold:", best_avg_threshold)
 
-# LOAD BEST MODEL AND EVALUATE PERFORMANCE TODO: consider turning this section to evaluate.py
-model_uri = "runs:/66ae62b956fc49778e7602575598039b/afl_xgb_model_last_fold_5"
+##########################################
+# RETRAIN THE BEST PERFORMING MODEL
+##########################################
+# Separate test season
+test_df = df_model.filter(pl.col("year") == 2025)
 
-loaded_model = mlflow.xgboost.load_model(model_uri)
+# Combine all historical seasons for training
+train_df = df_model.filter(pl.col("year") < 2025)
 
-# NOTE: ensure the dummy row is removed when evaluating
+# Features and labels
+X_train = train_df.drop(["win", "weight", "year"])
+y_train = train_df["win"]
+w_train = train_df["weight"]
+
+X_test = test_df.drop(["win", "weight", "year"])
+y_test = test_df["win"]
+w_test = test_df["weight"]
+
+# Convert to DMatrix
+dtrain = xgb.DMatrix(X_train, label=y_train, weight=w_train, enable_categorical=True)
+dtest = xgb.DMatrix(X_test, label=y_test, weight=w_test, enable_categorical=True)
+
+# Compute scale_pos_weight from all training data (excluding dummy rows if needed)
+y_train_np = train_df.filter(pl.col("weight") == 1.0)["win"].to_numpy()
+pos = (y_train_np == 1).sum()
+neg = (y_train_np == 0).sum()
+scale_pos_weight = neg / pos
+
+# Use the best hyperparameters from Optuna
+best_params = best_trial.params  # from your Optuna study
+best_params.update({
+    "objective": "binary:logistic",
+    "eval_metric": "auc",
+    "seed": 42,
+    "device": "cpu",
+    "tree_method": "hist",
+    "scale_pos_weight": scale_pos_weight
+})
+
+best_boost_round = 51 # from mlflow
+
+# Train the final model with early stopping on the last historical season
+evals_result = {}
+final_model = xgb.train(
+    best_params,
+    dtrain,
+    num_boost_round=best_boost_round,
+    verbose_eval=True
+)
 
 # PLOT THE BASE TEST CONFUSION MATRIX
-plot_confusion_matrix(loaded_model, dtest, y_test, "Test")
+plot_confusion_matrix(final_model, dtest, y_test, "Test", threshold=best_avg_threshold)
 
 # Plotting the feature importance
 # 'gain' is the most important metric for interpreting feature contribution
-plot_feature_importance(loaded_model, "gain", 10)
+plot_feature_importance(final_model, "gain", 10)
 
 # Plot ROC AUC for all three sets
-plot_train_val_test_auc(loaded_model, [dtrain, dval, dtest], [y_train, y_val, y_test])
+plot_train_val_test_auc(final_model, [dtrain, dval, dtest], [y_train, y_val, y_test])
 
 # Plot Precision-Recall 
-plot_precision_recall(loaded_model, dval, y_val, "Validation")
-plot_precision_recall(loaded_model, dtest, y_test, "Test")
+plot_precision_recall(final_model, dtest, y_test, "Test")
 
-# predict accuracy values for differing thresholds and get the best threshold
-y_scores = model.predict(dval) 
-thresholds = np.linspace(0, 1, 200)
-accuracies = []
-for t in thresholds:
-    y_pred = (y_scores >= t).astype(int)
-    acc = accuracy_score(y_val, y_pred)
-    accuracies.append(acc)
-accuracies = np.array(accuracies)
-best_idx = np.argmax(accuracies)
-best_t = thresholds[best_idx]
-best_acc = accuracies[best_idx]
-
-# plot the accuracy vs threshold to select the threshold to maximise accuracy 
-plot_accuracy_vs_threshold(thresholds, accuracies, best_acc, best_t)
-
-# plot the confusion matrix with the best threshold set
-plot_confusion_matrix(model, dtest, y_test, "BT Test", best_t)
-
-# delete mlflow runs
-# Get the experiment ID
-exp = mlflow.get_experiment_by_name("afl_win_predictor")
-experiment_id = exp.experiment_id
-
-# Delete all runs
-for run_info in mlflow.list_run_infos(experiment_id):
-    mlflow.delete_run(run_info.run_id)
-
-print("All runs deleted for experiment:", experiment_id)
+# plot the calibration curve
+plot_calibration_curve(final_model, dtest, y_test, "Test")
