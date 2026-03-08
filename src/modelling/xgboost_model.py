@@ -481,7 +481,7 @@ def objective(trial):
 
 # Create the study and optimize
 study = optuna.create_study(direction="maximize")
-study.optimize(objective, n_trials=20, n_jobs=-1)  # n_trials can be larger
+study.optimize(objective, n_trials=200, n_jobs=-1)  # n_trials can be larger
 
 # Best trial
 best_trial = study.best_trial
@@ -489,7 +489,7 @@ print("Best Mean Validation Accuracy:", best_trial.value)
 print("Best Hyperparameters:", best_trial.params)
 
 # get the best avg threshold
-best_avg_threshold = get_best_mlflow_avg_threshold(study, "20260308_205622")
+best_avg_threshold = get_best_mlflow_avg_threshold(study, "20260308_214637")
 print("Best Avg Threshold:", best_avg_threshold)
 
 ##########################################
@@ -531,7 +531,7 @@ best_params.update({
     "scale_pos_weight": scale_pos_weight
 })
 
-best_boost_round = 51 # from mlflow
+best_boost_round = 63 # from mlflow
 
 # Train the final model with early stopping on the last historical season
 evals_result = {}
