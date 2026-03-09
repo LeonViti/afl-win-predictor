@@ -238,6 +238,7 @@ def compute_fixture_features(path):
         pl.col("localtime_dt"),
         pl.col("hteam").alias("team"),
         pl.col("hscore").alias("score"),
+        (pl.col("hscore") - pl.col("ascore")).alias("margin"),
         # win = 1 if wins, 0.5 if draw, 0 if loss
         pl.when(pl.col("hscore") > pl.col("ascore")).then(1.0) 
         .when(pl.col("hscore") == pl.col("ascore")).then(0.5)
@@ -249,6 +250,7 @@ def compute_fixture_features(path):
         pl.col("localtime_dt"),
         pl.col("ateam").alias("team"),
         pl.col("ascore").alias("score"),
+        (pl.col("hscore") - pl.col("ascore")).alias("margin"),
         # win = 1 if away wins, 0.5 if draw, 0 if loss
         pl.when(pl.col("ascore") > pl.col("hscore")).then(1.0) 
         .when(pl.col("ascore") == pl.col("hscore")).then(0.5)
@@ -262,14 +264,16 @@ def compute_fixture_features(path):
     team_df = team_df.with_columns([
         # shift wins by 1 to exclude current game for each team
         pl.col("score").shift(1).over("team").alias("score_lag1"),
-        pl.col("win").shift(1).over("team").alias("win_lag1")
+        pl.col("win").shift(1).over("team").alias("win_lag1"),
+        pl.col("margin").shift(1).over("team").alias("margin_lag1")
     ])
 
     # rolling sum/mean for last 3, 5, 10, 20 games (excluding current)
     team_df = calc_short_long_term_feats(team_df, "win_lag1", "win_rate")
     team_df = calc_short_long_term_feats(team_df, "score_lag1", "avg_score")
+    team_df = calc_short_long_term_feats(team_df, "margin_lag1", "avg_margin")
 
-    # TODO: create a rolling_mergin feature
+    # TODO: create an is home ground flag: hteam_ground == venue
 
     # Fill nulls with 0 as events are rare
     team_df = team_df.fill_null(0)
@@ -278,12 +282,13 @@ def compute_fixture_features(path):
     win_rate = team_df.select([
         "localtime_dt", "team", 
         "win_lag1", "last3_win_rate", "last5_win_rate", "last10_win_rate", "last20_win_rate",
-        "score_lag1", "last3_avg_score", "last5_avg_score", "last10_avg_score", "last20_avg_score"
+        "score_lag1", "last3_avg_score", "last5_avg_score", "last10_avg_score", "last20_avg_score",
+        "margin_lag1", "last3_avg_margin", "last5_avg_margin", "last10_avg_margin", "last20_avg_margin"
     ])
 
     # rename home and away feats for join
-    hwin_rate = rename_team_features(win_rate, ["win_lag1", "score_lag1"], "h", ["win_rate", "avg_score"])
-    awin_rate = rename_team_features(win_rate, ["win_lag1", "score_lag1"], "a", ["win_rate", "avg_score"])
+    hwin_rate = rename_team_features(win_rate, ["win_lag1", "score_lag1", "margin_lag1"], "h", ["win_rate", "avg_score", "avg_margin"])
+    awin_rate = rename_team_features(win_rate, ["win_lag1", "score_lag1", "margin_lag1"], "a", ["win_rate", "avg_score", "avg_margin"])
 
     # Merge home features
     df_clean = df_clean.join(
@@ -301,6 +306,7 @@ def compute_fixture_features(path):
 
     df_clean = calc_diff_feats(df_clean, [3, 5, 10, 20], "win_rate")
     df_clean = calc_diff_feats(df_clean, [3, 5, 10, 20], "avg_score")
+    df_clean = calc_diff_feats(df_clean, [3,5,10,20], "avg_margin")
 
 
     return df_clean
