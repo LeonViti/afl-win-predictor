@@ -299,8 +299,8 @@ def compute_fixture_features(path):
         how="left"
     )
 
-    calc_diff_feats(df_clean, [3, 5, 10, 20], "win_rate")
-    calc_diff_feats(df_clean, [3, 5, 10, 20], "avg_score")
+    df_clean = calc_diff_feats(df_clean, [3, 5, 10, 20], "win_rate")
+    df_clean = calc_diff_feats(df_clean, [3, 5, 10, 20], "avg_score")
 
 
     return df_clean

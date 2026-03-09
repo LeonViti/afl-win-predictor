@@ -75,9 +75,12 @@ def prepare_features(df: pl.DataFrame, cat_cols: list[str]) -> pl.DataFrame:
 
     df_clean = df_clean.select([
         'ateam', 'ateamid', 'hteam', 'hteamid', 'is_final', 'is_grand_final', 'localtime_dt',
-        'round', 'winner', 'year', 'venue_location', 'tz_shift_advantage',
-        'hlast3_win_rate', 'alast3_win_rate', 'hlast5_win_rate', 'alast5_win_rate',
-        'hlast10_win_rate', 'alast10_win_rate', 'hlast20_win_rate', 'alast20_win_rate',
+        'round', 'winner', 'year', 'venue_location', 'tz_shift_advantage', 
+        'hwin_lag1', 'awin_lag1', 'hscore_lag1', 'ascore_lag1',
+        "diff_last3_win_rate", "diff_last5_win_rate", "diff_last10_win_rate", "diff_last20_win_rate",
+        "diff_last3_avg_score", "diff_last5_avg_score", "diff_last10_avg_score", "diff_last20_avg_score",
+        # 'hlast3_win_rate', 'alast3_win_rate', 'hlast5_win_rate', 'alast5_win_rate',
+        # 'hlast10_win_rate', 'alast10_win_rate', 'hlast20_win_rate', 'alast20_win_rate',
         'is_interstate_game', "time_of_day", 'is_weekend_game',
         'win'
     ])
@@ -496,7 +499,7 @@ print("Best Mean Validation Accuracy:", best_trial.value)
 print("Best Hyperparameters:", best_trial.params)
 
 # get the best avg threshold
-best_avg_threshold = get_best_mlflow_avg_threshold(study, "20260309_160634")
+best_avg_threshold = get_best_mlflow_avg_threshold(study, "20260309_214543")
 print("Best Avg Threshold:", best_avg_threshold)
 
 ##########################################
@@ -538,7 +541,7 @@ best_params.update({
     "scale_pos_weight": scale_pos_weight
 })
 
-best_boost_round = 88 # from mlflow
+best_boost_round = 29 # from mlflow
 
 # Train the final model with early stopping on the last historical season
 evals_result = {}
