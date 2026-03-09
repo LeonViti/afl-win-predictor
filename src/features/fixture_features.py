@@ -133,7 +133,17 @@ def compute_fixture_features(path):
             .alias("is_interstate_game")
     ])
 
-    # TODO: create time_of_day column
+    # create time_of_day column
+    df_clean = df_clean.with_columns(
+        pl.when(pl.col("localtime_dt").dt.hour().is_between(5, 11))
+            .then(pl.lit("morning")) # 5am >= morning < 12pm
+        .when(pl.col("localtime_dt").dt.hour().is_between(12, 16))
+            .then(pl.lit("afternoon")) # 12pm >= afternoon < 5pm
+        .when(pl.col("localtime_dt").dt.hour().is_between(17, 20))
+            .then(pl.lit("evening")) # 5pm >= afternoon < 9pm
+        .otherwise(pl.lit("night")) # 9pm >= night < 5am
+        .alias("time_of_day")
+    )
 
     # TODO: create is_weekend flag
 
