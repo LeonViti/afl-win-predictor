@@ -155,15 +155,11 @@ def compute_fixture_features(path):
 
     # create is_weekend flag
     df_clean = df_clean.with_columns(
-        (
-            (pl.col("day_of_week") == "saturday") |
-            (pl.col("day_of_week") == "sunday")
-        )
+        pl.col("day_of_week")
+        .is_in(["saturday", "sunday"])
         .cast(pl.Int8)
         .alias("is_weekend_game")
     )
-
-    # TODO: create day_of_week column
 
     # TODO: create month column 
 
