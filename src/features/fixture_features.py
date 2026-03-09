@@ -109,7 +109,7 @@ def create_timezone_feats(
 ######################################
 def compute_fixture_features(path):
     # load in data
-    path = PROJECT_ROOT / 'data/complete_datasets/squiggle_fixture_all_seasons.parquet'
+    # path = PROJECT_ROOT / 'data/complete_datasets/squiggle_fixture_all_seasons.parquet'
     fixture_df = pl.read_parquet(path)
 
     # create column venue_location to represent the state or country (if played outside Aus) of the match
@@ -191,13 +191,30 @@ def compute_fixture_features(path):
         pl.col("win").shift(1).over("team").alias("win_lag1") 
     ])
 
-    # rolling sum/mean for last 5 games (excluding current)
+    # rolling sum/mean for last 3, 5, 10, 20 games (excluding current)
     team_df = team_df.with_columns([
         pl.col("win_lag1")
-        .rolling_mean(window_size=5, min_samples=1)
-        .over("team")  # ensures rolling is per team
-        .alias("last5_win_rate")
+            .rolling_mean(window_size=3, min_samples=1)
+            .over("team")
+            .alias("last3_win_rate"),
+
+        pl.col("win_lag1")
+            .rolling_mean(window_size=5, min_samples=1)
+            .over("team")
+            .alias("last5_win_rate"),
+
+        pl.col("win_lag1")
+            .rolling_mean(window_size=10, min_samples=1)
+            .over("team")
+            .alias("last10_win_rate"),
+
+        pl.col("win_lag1")
+            .rolling_mean(window_size=20, min_samples=1)
+            .over("team")
+            .alias("last20_win_rate"),
     ])
+
+    # TODO: create a rolling_mergin feature
 
     # Fill nulls with 0 as events are rare
     team_df = team_df.with_columns([
@@ -206,18 +223,33 @@ def compute_fixture_features(path):
     ])
 
     # Last 5 games win rate per team
-    win_rate = team_df.select(["localtime_dt", "team", "last5_win_rate"])
+    win_rate = team_df.select([
+        "localtime_dt", "team", "last3_win_rate",
+        "last5_win_rate", "last10_win_rate", "last20_win_rate"
+    ])
 
     # Merge home features
     df_clean = df_clean.join(
-        win_rate.rename({"team":"hteam", "last5_win_rate":"hlast5_win_rate"}),
+        win_rate.rename({
+            "team":"hteam", 
+            "last3_win_rate":"hlast3_win_rate",
+            "last5_win_rate":"hlast5_win_rate",
+            "last10_win_rate":"hlast10_win_rate",
+            "last20_win_rate":"hlast20_win_rate",
+        }),
         on=["localtime_dt", "hteam"],
         how="left"
     )
 
     # Merge away features
     df_clean = df_clean.join(
-        win_rate.rename({"team":"ateam", "last5_win_rate":"alast5_win_rate"}),
+        win_rate.rename({
+            "team":"ateam", 
+            "last3_win_rate":"alast3_win_rate",
+            "last5_win_rate":"alast5_win_rate",
+            "last10_win_rate":"alast10_win_rate",
+            "last20_win_rate":"alast20_win_rate",
+        }),
         on=["localtime_dt", "ateam"],
         how="left"
     )

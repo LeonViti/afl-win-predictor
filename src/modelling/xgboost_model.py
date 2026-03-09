@@ -76,7 +76,9 @@ def prepare_features(df: pl.DataFrame, cat_cols: list[str]) -> pl.DataFrame:
     df_clean = df_clean.select([
         'ateam', 'ateamid', 'hteam', 'hteamid', 'is_final', 'is_grand_final', 'localtime_dt',
         'round', 'winner', 'year', 'venue_location', 'tz_shift_advantage',
-        'hlast5_win_rate', 'alast5_win_rate', 'is_interstate_game', "time_of_day", 'is_weekend_game',
+        'hlast3_win_rate', 'alast3_win_rate', 'hlast5_win_rate', 'alast5_win_rate',
+        'hlast10_win_rate', 'alast10_win_rate', 'hlast20_win_rate', 'alast20_win_rate',
+        'is_interstate_game', "time_of_day", 'is_weekend_game',
         'win'
     ])
 
@@ -301,7 +303,7 @@ plot_training_history(model, evals_result)
 
 # Plotting the feature importance
 # 'gain' is the most important metric for interpreting feature contribution
-plot_feature_importance(model, "gain", 15)
+plot_feature_importance(model, "gain", 25)
 
 # Plot ROC AUC for all three sets
 plot_train_val_test_auc(model, [dtrain, dval, dtest], [y_train, y_val, y_test])
