@@ -145,9 +145,23 @@ def compute_fixture_features(path):
         .alias("time_of_day")
     )
 
-    # TODO: create is_weekend flag
+    # create day_of_week column
+    df_clean = df_clean.with_columns(
+        pl.col("localtime_dt")
+            .dt.strftime("%A")
+            .str.to_lowercase()
+            .alias("day_of_week")
+    )
 
-    # TODO: create is_night_game flag 
+    # create is_weekend flag
+    df_clean = df_clean.with_columns(
+        (
+            (pl.col("day_of_week") == "saturday") |
+            (pl.col("day_of_week") == "sunday")
+        )
+        .cast(pl.Int8)
+        .alias("is_weekend_game")
+    )
 
     # TODO: create day_of_week column
 
