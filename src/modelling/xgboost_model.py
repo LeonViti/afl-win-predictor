@@ -73,9 +73,12 @@ def prepare_features(df: pl.DataFrame, cat_cols: list[str]) -> pl.DataFrame:
     (pl.col("hscore") > pl.col("ascore")).cast(pl.Int8).alias("win")
     ])
 
-    df_clean = df_clean.select(['ateam', 'ateamid', 'hteam', 'hteamid', 'is_final', 'is_grand_final', 'localtime_dt',
-                        'round', 'winner', 'year', 'venue_location', 'tz_shift_advantage',
-                        'hlast5_win_rate', 'alast5_win_rate', 'win'])
+    df_clean = df_clean.select([
+        'ateam', 'ateamid', 'hteam', 'hteamid', 'is_final', 'is_grand_final', 'localtime_dt',
+        'round', 'winner', 'year', 'venue_location', 'tz_shift_advantage',
+        'hlast5_win_rate', 'alast5_win_rate', 'is_interstate_game', "time_of_day", 'is_weekend_game',
+        'win'
+    ])
 
 
     df_clean = df_clean.drop(['ateamid', 'hteamid', 'winner', 'localtime_dt'])
@@ -242,7 +245,7 @@ path = PROJECT_ROOT / 'data/complete_datasets/squiggle_fixture_all_seasons.parqu
 df = compute_fixture_features(path)
 
 # prepare features
-cat_cols = ["ateam", "hteam", "venue_location"]
+cat_cols = ["ateam", "hteam", "venue_location", "time_of_day"]
 df_model = prepare_features(df, cat_cols)
 
 # This works, but converts to NumPy internally
@@ -298,7 +301,7 @@ plot_training_history(model, evals_result)
 
 # Plotting the feature importance
 # 'gain' is the most important metric for interpreting feature contribution
-plot_feature_importance(model, "gain", 10)
+plot_feature_importance(model, "gain", 15)
 
 # Plot ROC AUC for all three sets
 plot_train_val_test_auc(model, [dtrain, dval, dtest], [y_train, y_val, y_test])
@@ -376,7 +379,7 @@ for i in fold_indices:
 # --- ROLLING WALK FORWARD SET-UP ---
 mlflow.set_experiment("afl_win_predictor")
 
-cat_cols = ["ateam", "hteam", "venue_location"]
+cat_cols = ["ateam", "hteam", "venue_location", "time_of_day"]
 df_model = prepare_features(df, cat_cols)
 
 # Separate final test season
@@ -481,7 +484,7 @@ def objective(trial):
 
 # Create the study and optimize
 study = optuna.create_study(direction="maximize")
-study.optimize(objective, n_trials=200, n_jobs=-1)  # n_trials can be larger
+study.optimize(objective, n_trials=100, n_jobs=-1)  # n_trials can be larger
 
 # Best trial
 best_trial = study.best_trial
@@ -489,7 +492,7 @@ print("Best Mean Validation Accuracy:", best_trial.value)
 print("Best Hyperparameters:", best_trial.params)
 
 # get the best avg threshold
-best_avg_threshold = get_best_mlflow_avg_threshold(study, "20260308_214637")
+best_avg_threshold = get_best_mlflow_avg_threshold(study, "20260309_151015")
 print("Best Avg Threshold:", best_avg_threshold)
 
 ##########################################
@@ -531,7 +534,7 @@ best_params.update({
     "scale_pos_weight": scale_pos_weight
 })
 
-best_boost_round = 63 # from mlflow
+best_boost_round = 53 # from mlflow
 
 # Train the final model with early stopping on the last historical season
 evals_result = {}
