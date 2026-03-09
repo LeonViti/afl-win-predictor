@@ -59,14 +59,14 @@ def create_timezone_feats(
     tz_df = (
         df
         .join(
-            team_tz_map.select(["team", "team_tz_min"])
-                    .rename({"team": "hteam", "team_tz_min": "hteam_tz_min"}),
+            team_tz_map.select(["team", "team_tz_min", "home_state"])
+                    .rename({"team": "hteam", "team_tz_min": "hteam_tz_min", "home_state": "hteam_home_state"}),
             on="hteam",
             how="left"
         )
         .join(
-            team_tz_map.select(["team", "team_tz_min"])
-                    .rename({"team": "ateam", "team_tz_min": "ateam_tz_min"}),
+            team_tz_map.select(["team", "team_tz_min", "home_state"])
+                    .rename({"team": "ateam", "team_tz_min": "ateam_tz_min", "home_state": "ateam_home_state"}),
             on="ateam",
             how="left"
         )
@@ -109,7 +109,7 @@ def create_timezone_feats(
 ######################################
 def compute_fixture_features(path):
     # load in data
-    # path = PROJECT_ROOT / 'data/complete_datasets/squiggle_fixture_all_seasons.parquet'
+    path = PROJECT_ROOT / 'data/complete_datasets/squiggle_fixture_all_seasons.parquet'
     fixture_df = pl.read_parquet(path)
 
     # create column venue_location to represent the state or country (if played outside Aus) of the match
@@ -126,8 +126,12 @@ def compute_fixture_features(path):
     team_tz_map = pl.read_csv(PROJECT_ROOT / "src/reference/team_tz_map.csv")
     df_clean = create_timezone_feats(venue_tz_map, team_tz_map, df_clean)
 
-    # TODO: create is_interstate_game flag
-    # is_interstate_game = home_state != away_state
+    # CREATE is_interstate_game FLAG (home_state != away_state)
+    df_clean = df_clean.with_columns([
+        (pl.col("hteam_home_state") != pl.col("ateam_home_state"))
+            .cast(pl.Int8)
+            .alias("is_interstate_game")
+    ])
 
     # TODO: create time_of_day column
 
