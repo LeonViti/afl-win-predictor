@@ -161,8 +161,6 @@ def compute_fixture_features(path):
         .alias("is_weekend_game")
     )
 
-    # TODO: create month column 
-
     # CREATE WINDOWED FEATS # TODO: make into function 
     # melt home and away sides to long format (team lvl); store if the team won or lost
     home_df = df_clean.select([ # select all home team games
