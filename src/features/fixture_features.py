@@ -104,6 +104,67 @@ def create_timezone_feats(
 
     return tz_df
 
+def calc_short_long_term_feats(
+    df: pl.DataFrame, 
+    lag_feat: str,
+    feat_suffix: str
+) -> pl.DataFrame:
+    """
+    df = team_df
+    lag_feat = win_lag1
+    feat_suffix = win_rate
+    """
+    # rolling sum/mean for last 3, 5, 10, 20 games (excluding current)
+    df = df.with_columns([
+        pl.col(lag_feat)
+            .rolling_mean(window_size=3, min_samples=1)
+            .over("team")
+            .alias(f"last3_{feat_suffix}"),
+
+        pl.col(lag_feat)
+            .rolling_mean(window_size=5, min_samples=1)
+            .over("team")
+            .alias(f"last5_{feat_suffix}"),
+
+        pl.col(lag_feat)
+            .rolling_mean(window_size=10, min_samples=1)
+            .over("team")
+            .alias(f"last10_{feat_suffix}"),
+
+        pl.col(lag_feat)
+            .rolling_mean(window_size=20, min_samples=1)
+            .over("team")
+            .alias(f"last20_{feat_suffix}"),
+    ])
+    
+    return df
+
+def rename_team_features(
+    df: pl.DataFrame, 
+    lagged_feat: str,
+    prefix: str,
+    suffix: str
+) -> pl.DataFrame:
+    """
+    Renames features to allow for remapping to home and away teams
+
+    Args
+        df:
+        lagged_feat: lagged feature e.g. win_lag1
+        prefix: home or away (h or a)
+        suffix: rolling window feature of interest. e.g. avg_score or win_rate
+    """
+    df_rename = df.rename({
+        "team": f"{prefix}team",
+        lagged_feat: f"{prefix}{lagged_feat}",
+        f"last3_{suffix}": f"{prefix}last3_{suffix}",
+        f"last5_{suffix}": f"{prefix}last5_{suffix}",
+        f"last10_{suffix}": f"{prefix}last10_{suffix}",
+        f"last20_{suffix}": f"{prefix}last20_{suffix}",
+    })
+
+    return df_rename
+
 ######################################
 # Code 
 ######################################
@@ -166,6 +227,7 @@ def compute_fixture_features(path):
     home_df = df_clean.select([ # select all home team games
         pl.col("localtime_dt"),
         pl.col("hteam").alias("team"),
+        pl.col("hscore").alias("score"),
         # win = 1 if wins, 0.5 if draw, 0 if loss
         pl.when(pl.col("hscore") > pl.col("ascore")).then(1.0) 
         .when(pl.col("hscore") == pl.col("ascore")).then(0.5)
@@ -176,6 +238,7 @@ def compute_fixture_features(path):
     away_df = df_clean.select([  # select all away team games
         pl.col("localtime_dt"),
         pl.col("ateam").alias("team"),
+        pl.col("ascore").alias("score"),
         # win = 1 if away wins, 0.5 if draw, 0 if loss
         pl.when(pl.col("ascore") > pl.col("hscore")).then(1.0) 
         .when(pl.col("ascore") == pl.col("hscore")).then(0.5)
@@ -188,68 +251,45 @@ def compute_fixture_features(path):
 
     team_df = team_df.with_columns([
         # shift wins by 1 to exclude current game for each team
-        pl.col("win").shift(1).over("team").alias("win_lag1") 
+        pl.col("score").shift(1).over("team").alias("score_lag1"),
+        pl.col("win").shift(1).over("team").alias("win_lag1")
     ])
 
     # rolling sum/mean for last 3, 5, 10, 20 games (excluding current)
-    team_df = team_df.with_columns([
-        pl.col("win_lag1")
-            .rolling_mean(window_size=3, min_samples=1)
-            .over("team")
-            .alias("last3_win_rate"),
-
-        pl.col("win_lag1")
-            .rolling_mean(window_size=5, min_samples=1)
-            .over("team")
-            .alias("last5_win_rate"),
-
-        pl.col("win_lag1")
-            .rolling_mean(window_size=10, min_samples=1)
-            .over("team")
-            .alias("last10_win_rate"),
-
-        pl.col("win_lag1")
-            .rolling_mean(window_size=20, min_samples=1)
-            .over("team")
-            .alias("last20_win_rate"),
-    ])
+    team_df = calc_short_long_term_feats(team_df, "win_lag1", "win_rate")
+    team_df = calc_short_long_term_feats(team_df, "score_lag1", "avg_score")
 
     # TODO: create a rolling_mergin feature
 
     # Fill nulls with 0 as events are rare
-    team_df = team_df.with_columns([
-        pl.col("win_lag1").fill_null(0),
-        pl.col("last5_win_rate").fill_null(0)
-    ])
+    df_clean = df_clean.fill_null(0)
 
     # Last 5 games win rate per team
     win_rate = team_df.select([
-        "localtime_dt", "team", "last3_win_rate",
-        "last5_win_rate", "last10_win_rate", "last20_win_rate"
+        "localtime_dt", "team", 
+        "win_lag1", "last3_win_rate", "last5_win_rate", "last10_win_rate", "last20_win_rate",
+        "score_lag1", "last3_avg_score", "last5_avg_score", "last10_avg_score", "last20_avg_score"
     ])
+
+    # rename home and away feats for join
+    hwin_rate = rename_team_features(win_rate, "win_lag1", "h", "win_rate")
+    hwin_rate = rename_team_features(hwin_rate, "score_lag1", "h", "avg_score")
+
+    # rename home and away feats for join
+    awin_rate = rename_team_features(win_rate, "win_lag1", "a", "win_rate")
+    awin_rate = rename_team_features(awin_rate, "score_lag1", "a", "avg_score")
+
 
     # Merge home features
     df_clean = df_clean.join(
-        win_rate.rename({
-            "team":"hteam", 
-            "last3_win_rate":"hlast3_win_rate",
-            "last5_win_rate":"hlast5_win_rate",
-            "last10_win_rate":"hlast10_win_rate",
-            "last20_win_rate":"hlast20_win_rate",
-        }),
+        hwin_rate,
         on=["localtime_dt", "hteam"],
         how="left"
     )
 
     # Merge away features
     df_clean = df_clean.join(
-        win_rate.rename({
-            "team":"ateam", 
-            "last3_win_rate":"alast3_win_rate",
-            "last5_win_rate":"alast5_win_rate",
-            "last10_win_rate":"alast10_win_rate",
-            "last20_win_rate":"alast20_win_rate",
-        }),
+        awin_rate,
         on=["localtime_dt", "ateam"],
         how="left"
     )

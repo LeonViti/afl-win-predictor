@@ -411,6 +411,8 @@ def objective(trial):
         "subsample": trial.suggest_float("subsample", 0.5, 1.0),
         "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
         "gamma": trial.suggest_float("gamma", 0.0, 5.0),
+        "reg_alpha": trial.suggest_float("reg_alpha", 0, 5.0),
+        "reg_lambda": trial.suggest_float("reg_lambda", 0, 5.0),        
     }
 
     fold_aucs = []
@@ -486,7 +488,7 @@ def objective(trial):
 
 # Create the study and optimize
 study = optuna.create_study(direction="maximize")
-study.optimize(objective, n_trials=100, n_jobs=-1)  # n_trials can be larger
+study.optimize(objective, n_trials=300, n_jobs=-1)  # n_trials can be larger
 
 # Best trial
 best_trial = study.best_trial
@@ -494,7 +496,7 @@ print("Best Mean Validation Accuracy:", best_trial.value)
 print("Best Hyperparameters:", best_trial.params)
 
 # get the best avg threshold
-best_avg_threshold = get_best_mlflow_avg_threshold(study, "20260309_151015")
+best_avg_threshold = get_best_mlflow_avg_threshold(study, "20260309_160634")
 print("Best Avg Threshold:", best_avg_threshold)
 
 ##########################################
@@ -536,7 +538,7 @@ best_params.update({
     "scale_pos_weight": scale_pos_weight
 })
 
-best_boost_round = 53 # from mlflow
+best_boost_round = 88 # from mlflow
 
 # Train the final model with early stopping on the last historical season
 evals_result = {}
@@ -552,7 +554,7 @@ plot_confusion_matrix(final_model, dtest, y_test, "Test", threshold=best_avg_thr
 
 # Plotting the feature importance
 # 'gain' is the most important metric for interpreting feature contribution
-plot_feature_importance(final_model, "gain", 10)
+plot_feature_importance(final_model, "gain", 20)
 
 # Plot ROC AUC for all three sets
 plot_train_val_test_auc(final_model, [dtrain, dval, dtest], [y_train, y_val, y_test])
