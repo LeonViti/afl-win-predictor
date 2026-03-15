@@ -5,6 +5,9 @@ This repo applies machine learning to predict whether a team will win or lose a 
 data_ingestion -> features -> modelling -> evalutation  
 
 # Setup
+## Dependencies
+This project uses [Task](https://taskfile.dev/) for environment setup and [UV](https://docs.astral.sh/uv/) for virtual environement management. Ensure they are installed before running this project. 
+
 ## Data Folder  
 Go to the Root dir, then run Run 
 
