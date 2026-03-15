@@ -1,0 +1,11 @@
+# Taskfile.yml
+version: '3'
+
+tasks:
+  setup-data-folders:
+    desc: "Create required data directories"
+    cmds:
+      - echo "Creating data/squiggle_fixture..."
+      - mkdir -p data/squiggle_fixture
+      - echo "Creating data/complete_datasets..."
+      - mkdir -p data/complete_datasets
