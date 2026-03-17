@@ -1,6 +1,7 @@
 # FOR INTERACTIVE SESSION comment out later
 import os
-os.chdir(r"C:\Users\leon_\Documents\personal_projects\afl-win-predictor")
+# os.chdir(r"C:\Users\leon_\Documents\personal_projects\afl-win-predictor")
+os.chdir(r"/home/lv/Documents/projects/afl-win-predictor")
 
 # Libraries
 import optuna
@@ -500,7 +501,7 @@ print("Best Mean Validation Accuracy:", best_trial.value)
 print("Best Hyperparameters:", best_trial.params)
 
 # get the best avg threshold
-best_avg_threshold = get_best_mlflow_avg_threshold(study, "20260309_225157")
+best_avg_threshold = get_best_mlflow_avg_threshold(study, "20260317_190808")
 print("Best Avg Threshold:", best_avg_threshold)
 
 ##########################################
@@ -542,7 +543,7 @@ best_params.update({
     "scale_pos_weight": scale_pos_weight
 })
 
-best_boost_round = 40 # from mlflow
+best_boost_round = 53 # from mlflow
 
 # Train the final model with early stopping on the last historical season
 evals_result = {}

@@ -4,8 +4,8 @@ where each row represents two teams, a home and an away team.
 """
 
 # FOR INTERACTIVE SESSION comment out later
-import os
-os.chdir(r"C:\Users\leon_\Documents\personal_projects\afl-win-predictor")
+# import os
+# os.chdir(r"C:\Users\leon_\Documents\personal_projects\afl-win-predictor")
 
 # Imports 
 import json
