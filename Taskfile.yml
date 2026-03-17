@@ -2,6 +2,13 @@
 version: '3'
 
 tasks:
+  # list default tasks
+  default:
+    desc: "List available tasks"
+    cmds:
+      - task --list
+
+  # create data folders in working environment
   setup-data-folders:
     desc: "Create required data directories"
     cmds:
