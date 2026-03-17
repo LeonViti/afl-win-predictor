@@ -16,7 +16,16 @@ task setup-data-folders
 ``` 
 
 ## R Environment 
-Run `renv::restore()` in the R interactive terminal CTRL+ENTER to setup R environment. All data is obtained using the fitzRoy data library. 
+
+Run `sudo apt install -y libcurl4-openssl-dev`
+
+Run `Rscript -e 'renv::install(c("jsonlite", "rlang"))'` from terminal to install packages 
+
+Run `Rscript -e 'renv::restore()'` from terminal to install the required R packages.
+
+**Note**: This can take a while (up to 20min) and will look stuck on `Installing arrow ...`. It is not stuck, just give it time. 
+
+All data is obtained using the fitzRoy data library in R. 
 
 ## Python Environment
 Ensure UV is installed.
