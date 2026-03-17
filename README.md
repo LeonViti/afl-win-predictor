@@ -9,14 +9,11 @@ data_ingestion -> features -> modelling -> evalutation
 This project uses [Task](https://taskfile.dev/) for environment setup and [UV](https://docs.astral.sh/uv/) for virtual environement management. Ensure they are installed before running this project. 
 
 ## Data Folder  
-Go to the Root dir, then run Run 
+To create data folders to save squiggle data to run the following.
 
 ```bash
-mkdir -p data/squiggle_fixture
-```
-```bash
-mkdir data/complete_datasets
-```
+task setup-data-folders
+``` 
 
 ## R Environment 
 Run `renv::restore()` in the R interactive terminal CTRL+ENTER to setup R environment. All data is obtained using the fitzRoy data library. 
