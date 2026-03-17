@@ -30,4 +30,4 @@ All data is obtained using the fitzRoy data library in R.
 ## Python Environment
 Ensure UV is installed.
 Run `uv sync` to setup the python virtual env. 
-Run `.venv\Scripts\activate` to activate UV environment.  
+Run `.venv\Scripts\activate` or `source .venv/bin/activate` to activate UV environment.  
