@@ -256,192 +256,121 @@ def get_best_mlflow_avg_threshold(study, trial_date_code):
 ################
 # Code
 ################
-path = PROJECT_ROOT / 'data/complete_datasets/squiggle_fixture_all_seasons.parquet'
-df = compute_fixture_features(path)
+def main():
+    path = PROJECT_ROOT / 'data/complete_datasets/squiggle_fixture_all_seasons.parquet'
+    df = compute_fixture_features(path)
 
-# prepare features
-cat_cols = ["ateam", "hteam", "venue_location", "time_of_day"]
-df_model = prepare_features(df, cat_cols)
+    # prepare features
+    cat_cols = ["ateam", "hteam", "venue_location", "time_of_day"]
+    df_model = prepare_features(df, cat_cols)
 
-# --- ROLLING WALK FORWARD SET-UP ---
-mlflow.set_experiment("afl_win_predictor")
+    # --- ROLLING WALK FORWARD SET-UP ---
+    mlflow.set_experiment("afl_win_predictor")
 
-cat_cols = ["ateam", "hteam", "venue_location", "time_of_day"]
-df_model = prepare_features(df, cat_cols)
+    cat_cols = ["ateam", "hteam", "venue_location", "time_of_day"]
+    df_model = prepare_features(df, cat_cols)
 
-# Separate final test season
-test_df = df_model.filter(pl.col("year") == 2025)
+    # Separate final test season
+    test_df = df_model.filter(pl.col("year") == 2025)
 
-# get seasons aside from the last season for training
-cv_df = df_model.filter(pl.col("year") < 2025)
+    # get seasons aside from the last season for training
+    cv_df = df_model.filter(pl.col("year") < 2025)
 
-# create rolling window walk folds
-walk_folds = create_rolling_forward_walk(cv_df, 5, cat_cols)
+    # create rolling window walk folds
+    walk_folds = create_rolling_forward_walk(cv_df, 5, cat_cols)
 
-# print fold windows
-print_fold_windows(walk_folds)
+    # print fold windows
+    print_fold_windows(walk_folds)
 
-def objective(trial):
+    def objective(trial):
 
-    params = {
-        "objective": "binary:logistic",
-        "eval_metric": "auc",
-        "seed": 42,
-        "device": "cpu",
-        "tree_method": "hist",  # recommended
-        "max_depth": trial.suggest_int("max_depth", 3, 10),
-        "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
-        "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
-        "subsample": trial.suggest_float("subsample", 0.5, 1.0),
-        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
-        "gamma": trial.suggest_float("gamma", 0.0, 5.0),
-        "reg_alpha": trial.suggest_float("reg_alpha", 0, 5.0),
-        "reg_lambda": trial.suggest_float("reg_lambda", 0, 5.0),        
-    }
+        params = {
+            "objective": "binary:logistic",
+            "eval_metric": "auc",
+            "seed": 42,
+            "device": "cpu",
+            "tree_method": "hist",  # recommended
+            "max_depth": trial.suggest_int("max_depth", 3, 10),
+            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+            "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
+            "subsample": trial.suggest_float("subsample", 0.5, 1.0),
+            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+            "gamma": trial.suggest_float("gamma", 0.0, 5.0),
+            "reg_alpha": trial.suggest_float("reg_alpha", 0, 5.0),
+            "reg_lambda": trial.suggest_float("reg_lambda", 0, 5.0),        
+        }
 
-    fold_aucs = []
-    fold_thresholds = []
-    fold_accuracies = []
-    fold_best_rounds = []
+        fold_aucs = []
+        fold_thresholds = []
+        fold_accuracies = []
+        fold_best_rounds = []
 
-    for train_df, val_df in walk_folds:
+        for train_df, val_df in walk_folds:
 
-        X_train = train_df.drop(["win", "year", "weight"])
-        y_train = train_df["win"]
-        w_train = train_df["weight"]
+            X_train = train_df.drop(["win", "year", "weight"])
+            y_train = train_df["win"]
+            w_train = train_df["weight"]
 
-        X_val = val_df.drop(["win", "year", "weight"])
-        y_val = val_df["win"]
-        w_val = val_df["weight"]
+            X_val = val_df.drop(["win", "year", "weight"])
+            y_val = val_df["win"]
+            w_val = val_df["weight"]
 
-        # Class imbalance (exclude dummy rows)
-        y_effective = train_df.filter(pl.col("weight") == 1.0)["win"].to_numpy()
-        pos = (y_effective == 1).sum()
-        neg = (y_effective == 0).sum()
-        params["scale_pos_weight"] = neg / pos
+            # Class imbalance (exclude dummy rows)
+            y_effective = train_df.filter(pl.col("weight") == 1.0)["win"].to_numpy()
+            pos = (y_effective == 1).sum()
+            neg = (y_effective == 0).sum()
+            params["scale_pos_weight"] = neg / pos
 
-        dtrain = xgb.DMatrix(X_train, label=y_train, weight=w_train, enable_categorical=True)
-        dval = xgb.DMatrix(X_val, label=y_val, weight=w_val, enable_categorical=True)
+            dtrain = xgb.DMatrix(X_train, label=y_train, weight=w_train, enable_categorical=True)
+            dval = xgb.DMatrix(X_val, label=y_val, weight=w_val, enable_categorical=True)
 
-        evals_result = {}
-        model = xgb.train(
-            params,
-            dtrain,
-            num_boost_round=2000,
-            evals=[(dtrain, "train"), (dval, "validation")],
-            early_stopping_rounds=50,
-            evals_result=evals_result,
-            verbose_eval=False,
-        )
+            evals_result = {}
+            model = xgb.train(
+                params,
+                dtrain,
+                num_boost_round=2000,
+                evals=[(dtrain, "train"), (dval, "validation")],
+                early_stopping_rounds=50,
+                evals_result=evals_result,
+                verbose_eval=False,
+            )
 
-        # make prediction on the validation set
-        y_val_pred = model.predict(dval)
+            # make prediction on the validation set
+            y_val_pred = model.predict(dval)
 
-        # append metrics
-        best_t, best_acc = get_best_accuracy_threshold(y_val, y_val_pred)
-        fold_aucs.append(roc_auc_score(y_val, y_val_pred))
-        fold_thresholds.append(best_t)
-        fold_accuracies.append(best_acc)
-        fold_best_rounds.append(model.best_iteration + 1)  # add 1 because best_iteration is zero-indexed
+            # append metrics
+            best_t, best_acc = get_best_accuracy_threshold(y_val, y_val_pred)
+            fold_aucs.append(roc_auc_score(y_val, y_val_pred))
+            fold_thresholds.append(best_t)
+            fold_accuracies.append(best_acc)
+            fold_best_rounds.append(model.best_iteration + 1)  # add 1 because best_iteration is zero-indexed
 
-    # calculate mean metrics across folds
-    mean_auc = float(np.mean(fold_aucs))
-    mean_threshold = float(np.mean(fold_thresholds))
-    mean_accuracy = float(np.mean(fold_accuracies))
-    mean_best_rounds = int(np.mean(fold_best_rounds))
+        # calculate mean metrics across folds
+        mean_auc = float(np.mean(fold_aucs))
+        mean_threshold = float(np.mean(fold_thresholds))
+        mean_accuracy = float(np.mean(fold_accuracies))
+        mean_best_rounds = int(np.mean(fold_best_rounds))
 
-    # define unique run name
-    run_name = f"trial_{trial.number}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    with mlflow.start_run(nested=True, run_name=run_name):
-        mlflow.log_params(params)
-        mlflow.log_metric("mean_val_auc", mean_auc)
-        mlflow.log_metric("mean_val_threshold", mean_threshold)
-        mlflow.log_metric("mean_val_accuracy", mean_accuracy)
-        mlflow.log_metric("mean_best_num_boost_rounds", mean_best_rounds)
-        mlflow.log_metric("num_folds", len(walk_folds))
+        # define unique run name
+        run_name = f"trial_{trial.number}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        with mlflow.start_run(nested=True, run_name=run_name):
+            mlflow.log_params(params)
+            mlflow.log_metric("mean_val_auc", mean_auc)
+            mlflow.log_metric("mean_val_threshold", mean_threshold)
+            mlflow.log_metric("mean_val_accuracy", mean_accuracy)
+            mlflow.log_metric("mean_best_num_boost_rounds", mean_best_rounds)
+            mlflow.log_metric("num_folds", len(walk_folds))
 
-        for i, (auc, acc, t, rounds) in enumerate(zip(fold_aucs, fold_accuracies, fold_thresholds, fold_best_rounds)):
-            mlflow.log_metric(f"fold_{i+1}_auc", auc)
-            mlflow.log_metric(f"fold_{i+1}_accuracy", acc)
-            mlflow.log_metric(f"fold_{i+1}_threshold", t)
-            mlflow.log_metric(f"fold_{i+1}_best_rounds", rounds)
+            for i, (auc, acc, t, rounds) in enumerate(zip(fold_aucs, fold_accuracies, fold_thresholds, fold_best_rounds)):
+                mlflow.log_metric(f"fold_{i+1}_auc", auc)
+                mlflow.log_metric(f"fold_{i+1}_accuracy", acc)
+                mlflow.log_metric(f"fold_{i+1}_threshold", t)
+                mlflow.log_metric(f"fold_{i+1}_best_rounds", rounds)
 
-    return mean_accuracy
+        return mean_accuracy
 
-# TODO: create optuna plots in mlflow
+    # TODO: create optuna plots in mlflow
 
-# Create the study and optimize
-# study = optuna.create_study(direction="maximize")
-# study.optimize(objective, n_trials=300, n_jobs=-1)  # n_trials can be larger
-
-# Best trial
-best_trial = study.best_trial
-print("Best Mean Validation Accuracy:", best_trial.value)
-print("Best Hyperparameters:", best_trial.params)
-
-# get the best avg threshold
-best_avg_threshold = get_best_mlflow_avg_threshold(study, "20260317_190808")
-print("Best Avg Threshold:", best_avg_threshold)
-
-##########################################
-# RETRAIN THE BEST PERFORMING MODEL
-##########################################
-# Separate test season
-test_df = df_model.filter(pl.col("year") == 2025)
-
-# Combine all historical seasons for training
-train_df = df_model.filter(pl.col("year") < 2025)
-
-# Features and labels
-X_train = train_df.drop(["win", "weight", "year"])
-y_train = train_df["win"]
-w_train = train_df["weight"]
-
-X_test = test_df.drop(["win", "weight", "year"])
-y_test = test_df["win"]
-w_test = test_df["weight"]
-
-# Convert to DMatrix
-dtrain = xgb.DMatrix(X_train, label=y_train, weight=w_train, enable_categorical=True)
-dtest = xgb.DMatrix(X_test, label=y_test, weight=w_test, enable_categorical=True)
-
-# Compute scale_pos_weight from all training data (excluding dummy rows if needed)
-y_train_np = train_df.filter(pl.col("weight") == 1.0)["win"].to_numpy()
-pos = (y_train_np == 1).sum()
-neg = (y_train_np == 0).sum()
-scale_pos_weight = neg / pos
-
-# Use the best hyperparameters from Optuna
-best_params = best_trial.params  # from your Optuna study
-best_params.update({
-    "objective": "binary:logistic",
-    "eval_metric": "auc",
-    "seed": 42,
-    "device": "cpu",
-    "tree_method": "hist",
-    "scale_pos_weight": scale_pos_weight
-})
-
-best_boost_round = 53 # from mlflow
-
-# Train the final model with early stopping on the last historical season
-evals_result = {}
-final_model = xgb.train(
-    best_params,
-    dtrain,
-    num_boost_round=best_boost_round,
-    verbose_eval=True
-)
-
-# PLOT THE BASE TEST CONFUSION MATRIX
-plot_confusion_matrix(final_model, dtest, y_test, "Test", threshold=best_avg_threshold)
-
-# Plotting the feature importance
-# 'gain' is the most important metric for interpreting feature contribution
-plot_feature_importance(final_model, "gain", 50)
-
-# Plot Precision-Recall 
-plot_precision_recall(final_model, dtest, y_test, "Test")
-
-# plot the calibration curve
-plot_calibration_curve(final_model, dtest, y_test, "Test")
+    # Create the study and optimize
+    # study = optuna.create_study(direction="maximize")
+    # study.optimize(objective, n_trials=300, n_jobs=-1)  # n_trials can be larger
