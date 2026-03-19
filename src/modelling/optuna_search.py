@@ -14,23 +14,13 @@ os.chdir(r"/home/lv/Documents/projects/afl-win-predictor")
 import optuna
 import mlflow
 import datetime
-import mlflow.xgboost
 import numpy as np
 import polars as pl
 import xgboost as xgb
 
-from sklearn.metrics import accuracy_score, roc_auc_score
+from sklearn.metrics import roc_auc_score
 from src.config import PROJECT_ROOT
 from src.features.fixture_features import compute_fixture_features
-from src.evaluation.plots import (
-    plot_confusion_matrix,
-    plot_training_history,
-    plot_feature_importance,
-    plot_train_val_test_auc,
-    plot_calibration_curve,
-    plot_precision_recall,
-    plot_accuracy_vs_threshold
-)
 
 #####################
 # Functions
@@ -372,5 +362,5 @@ def main():
     # TODO: create optuna plots in mlflow
 
     # Create the study and optimize
-    # study = optuna.create_study(direction="maximize")
-    # study.optimize(objective, n_trials=300, n_jobs=-1)  # n_trials can be larger
+    study = optuna.create_study(direction="maximize")
+    study.optimize(objective, n_trials=600, n_jobs=-1)  # n_trials can be larger

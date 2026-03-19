@@ -14,17 +14,17 @@ import numpy as np
 import polars as pl
 import xgboost as xgb
 
+from mlflow.tracking import MlflowClient
 from sklearn.metrics import accuracy_score, roc_auc_score
+
 from src.config import PROJECT_ROOT
 from src.features.fixture_features import compute_fixture_features
+from src.modelling.optuna_search import prepare_features
 from src.evaluation.plots import (
     plot_confusion_matrix,
-    plot_training_history,
     plot_feature_importance,
-    plot_train_val_test_auc,
     plot_calibration_curve,
-    plot_precision_recall,
-    plot_accuracy_vs_threshold
+    plot_precision_recall
 )
 
 #####################
@@ -35,8 +35,6 @@ from src.evaluation.plots import (
 #####################
 # Code
 #####################
-from src.modelling.optuna_search import prepare_features
-
 path = PROJECT_ROOT / 'data/complete_datasets/squiggle_fixture_all_seasons.parquet'
 df = compute_fixture_features(path)
 
@@ -47,21 +45,21 @@ df_model = prepare_features(df, cat_cols)
 ############
 # mlfow 
 ############
-# TODO: create optuna plots in mlflow
 # load the best performing model from mlflow
+client = MlflowClient()
+experiment_id = client.get_experiment_by_name("afl_win_predictor").experiment_id
 
-# Create the study and optimize
-study = optuna.create_study(direction="maximize")
-study.optimize(objective, n_trials=300, n_jobs=-1)  # n_trials can be larger
+# Find the best run based on metric
+best_run = client.search_runs(
+    experiment_ids=[experiment_id],
+    max_results=1,
+    order_by=["metrics.mean_val_accuracy DESC"] # Use DESC for accuracy
+)[0]
 
-# Best trial
-best_trial = study.best_trial
-print("Best Mean Validation Accuracy:", best_trial.value)
-print("Best Hyperparameters:", best_trial.params)
-
-# get the best avg threshold
-best_avg_threshold = get_best_mlflow_avg_threshold(study, "20260317_190808")
-print("Best Avg Threshold:", best_avg_threshold)
+# get best threshold, params, and num_boosting rounds
+best_params = best_run.data.params
+best_boost_round = int(round(best_run.data.metrics.get("mean_best_num_boost_rounds"), 0))
+best_avg_threshold= best_run.data.metrics.get("mean_val_threshold")
 
 ##########################################
 # RETRAIN THE BEST PERFORMING MODEL
@@ -92,7 +90,7 @@ neg = (y_train_np == 0).sum()
 scale_pos_weight = neg / pos
 
 # Use the best hyperparameters from Optuna
-best_params = best_trial.params  # from your Optuna study
+# best_params = best_trial.params  # from your Optuna study
 best_params.update({
     "objective": "binary:logistic",
     "eval_metric": "auc",
@@ -101,8 +99,6 @@ best_params.update({
     "tree_method": "hist",
     "scale_pos_weight": scale_pos_weight
 })
-
-best_boost_round = 53 # from mlflow
 
 # Train the final model with early stopping on the last historical season
 evals_result = {}
@@ -119,9 +115,6 @@ plot_confusion_matrix(final_model, dtest, y_test, "Test", threshold=best_avg_thr
 # Plotting the feature importance
 # 'gain' is the most important metric for interpreting feature contribution
 plot_feature_importance(final_model, "gain", 50)
-
-# Plot ROC AUC for all three sets
-plot_train_val_test_auc(final_model, [dtrain, dval, dtest], [y_train, y_val, y_test])
 
 # Plot Precision-Recall 
 plot_precision_recall(final_model, dtest, y_test, "Test")
