@@ -347,42 +347,6 @@ plot_confusion_matrix(model, dtest, y_test, "BT Test", best_t)
 ############
 # mlfow 
 ############
-mlflow.set_experiment("afl_win_predictor")
-
-# --- EXPANDING WALK-FORWARD FOLDS SETUP ---
-# prepare features
-cat_cols = ["ateam", "hteam", "venue_location"]
-df_model = prepare_features(df, cat_cols)
-
-# Separate final test season
-test_df = df_model.filter(pl.col("year") == 2025)
-
-# Historical seasons for CV
-cv_df = df_model.filter(pl.col("year") < 2025)
-seasons = sorted(cv_df["year"].unique())
-
-# Pick 10 folds spaced evenly across the years (adjust as needed)
-# fold_indices = np.linspace(3, len(seasons)-1, 20, dtype=int)  # start at 3 to have enough train data
-fold_indices = sorted(set(np.linspace(3, len(seasons)-1, 20).astype(int)))
-walk_folds = []
-
-for i in fold_indices:
-    train_seasons = seasons[:i]
-    val_season = seasons[i]
-    train_df = cv_df.filter(pl.col("year").is_in(train_seasons))
-    val_df = cv_df.filter(pl.col("year") == val_season)
-    # handle unseen values 
-    val_df = handle_unseen_categories(train_df, val_df, cat_cols, "UNK")
-
-    # if dummy_row is present in the validation set, remove it
-    val_df = val_df.filter(pl.col("weight") == 1.0)
-
-    walk_folds.append((train_df, val_df))
-
-# Check fold years
-# for idx, (tr, val) in enumerate(walk_folds):
-#     print(f"Fold {idx+1}: train years = {tr['year'].unique().to_list()}, val year = {val['year'].unique().to_list()}")
-
 # --- ROLLING WALK FORWARD SET-UP ---
 mlflow.set_experiment("afl_win_predictor")
 
