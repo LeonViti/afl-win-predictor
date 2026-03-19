@@ -6,10 +6,11 @@ go `mlflow ui` to check the runs.
 
 # FOR INTERACTIVE SESSION comment out later
 import os
-# os.chdir(r"C:\Users\leon_\Documents\personal_projects\afl-win-predictor")
 os.chdir(r"/home/lv/Documents/projects/afl-win-predictor")
 
+#####################
 # Libraries
+#####################
 import optuna
 import mlflow
 import datetime
@@ -30,6 +31,10 @@ from src.evaluation.plots import (
     plot_precision_recall,
     plot_accuracy_vs_threshold
 )
+
+#####################
+# Functions
+#####################
 
 def create_dummy_row(df: pl.DataFrame, cat_cols: list[str]) -> pl.DataFrame:
     """
@@ -366,8 +371,8 @@ def objective(trial):
 # TODO: create optuna plots in mlflow
 
 # Create the study and optimize
-study = optuna.create_study(direction="maximize")
-study.optimize(objective, n_trials=300, n_jobs=-1)  # n_trials can be larger
+# study = optuna.create_study(direction="maximize")
+# study.optimize(objective, n_trials=300, n_jobs=-1)  # n_trials can be larger
 
 # Best trial
 best_trial = study.best_trial
