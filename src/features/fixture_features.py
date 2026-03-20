@@ -4,8 +4,8 @@ where each row represents two teams, a home and an away team.
 """
 
 # FOR INTERACTIVE SESSION comment out later
-# import os
-# os.chdir(r"C:\Users\leon_\Documents\personal_projects\afl-win-predictor")
+import os
+os.chdir(r"/home/lv/Documents/projects/afl-win-predictor")
 
 # Imports 
 import json
@@ -170,6 +170,39 @@ def rename_team_features(
 
     return df.rename(rename_dict)
 
+def rename_team_features(
+    df: pl.DataFrame,
+    lagged_feats: list[str],
+    prefix: str,
+    suffixes: list[str] = None,
+    if_lagged: bool = False,
+    team_name: str = "team"
+) -> pl.DataFrame:
+    """
+    Renames team level features for home/away joins.
+    
+    Args:
+        df: Dataframe containing team features.
+        lagged_feats: Features to prefix (e.g., ["win_lag1", "days_break"]).
+        prefix: Team prefix ("h" or "a").
+        suffixes: Rolling suffixes (e.g., ["win_rate"]). Ignored if if_lagged=True.
+        if_lagged: If True, only renames the team and the specified lagged_feats.
+    """
+    rename_dict = {team_name: f"{prefix}team"}
+
+    # Handle immediate lagged features (e.g. days_break)
+    for lagged_feat in lagged_feats:
+        rename_dict[lagged_feat] = f"{prefix}{lagged_feat}"
+
+    # Only process rolling windows if we aren't restricted to simple lags
+    if not if_lagged and suffixes is not None:
+        for suffix in suffixes:
+            for window in [3, 5, 10, 20]:
+                col_name = f"last{window}_{suffix}"
+                rename_dict[col_name] = f"{prefix}{col_name}"
+
+    return df.rename(rename_dict)
+
 def calc_diff_feats(df, windows: list[int], suffix: str):
     df = df.with_columns([
         (pl.col(f"hlast{w}_{suffix}") - pl.col(f"alast{w}_{suffix}"))
@@ -269,9 +302,18 @@ def compute_fixture_features(path):
         # shift wins by 1 to exclude current game for each team
         pl.col("score").shift(1).over("team").alias("score_lag1"),
         pl.col("win").shift(1).over("team").alias("win_lag1"),
-        pl.col("margin").shift(1).over("team").alias("margin_lag1")
+        pl.col("margin").shift(1).over("team").alias("margin_lag1"),
+        pl.col("localtime_dt").shift(1).over("team").alias("localtime_dt_lag1")
     ])
 
+    # Calculate the number of days since the team last played
+    team_df = team_df.with_columns(
+        ((pl.col("localtime_dt") - pl.col("localtime_dt_lag1")).dt.total_days())
+        .clip(0, 20) # for end of season, set values > 20 to 20 instead of 200 days
+        .fill_null(20) # Assume a standard week for the very first historical records
+        .alias("days_break")
+    )
+    
     # rolling sum/mean for last 3, 5, 10, 20 games (excluding current)
     team_df = calc_short_long_term_feats(team_df, "win_lag1", "win_rate")
     team_df = calc_short_long_term_feats(team_df, "score_lag1", "avg_score")
@@ -284,7 +326,7 @@ def compute_fixture_features(path):
 
     # Last 5 games win rate per team
     win_rate = team_df.select([
-        "localtime_dt", "team", 
+        "localtime_dt", "team", "days_break",
         "win_lag1", "last3_win_rate", "last5_win_rate", "last10_win_rate", "last20_win_rate",
         "score_lag1", "last3_avg_score", "last5_avg_score", "last10_avg_score", "last20_avg_score",
         "margin_lag1", "last3_avg_margin", "last5_avg_margin", "last10_avg_margin", "last20_avg_margin"
@@ -293,6 +335,11 @@ def compute_fixture_features(path):
     # rename home and away feats for join
     hwin_rate = rename_team_features(win_rate, ["win_lag1", "score_lag1", "margin_lag1"], "h", ["win_rate", "avg_score", "avg_margin"])
     awin_rate = rename_team_features(win_rate, ["win_lag1", "score_lag1", "margin_lag1"], "a", ["win_rate", "avg_score", "avg_margin"])
+
+    # rename days_break column TODO: fix this up
+    days_df = team_df.select(["localtime_dt", "team", "days_break"])
+    hdays_df = rename_team_features(days_df, ["days_break"], "h", True, "team")
+    adays_df = rename_team_features(days_df, ["days_break"], "a", True, "team")
 
     # Merge home features
     df_clean = df_clean.join(
@@ -335,4 +382,11 @@ def compute_fixture_features(path):
 # df_clean["tz"].value_counts().sort(by="count", descending=True)
 # df_clean["ateam"].value_counts().sort(by="count", descending=True)
 
+# view the number of days_breaks
+# break_counts = (
+#     team_df["days_break"]
+#     .value_counts()
+#     .sort("count", descending=True)
+# )
+# print(break_counts.head(20))
 
