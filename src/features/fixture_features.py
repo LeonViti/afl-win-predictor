@@ -15,10 +15,15 @@ from src.config import PROJECT_ROOT
 # Functions
 def create_venue_location_feat(df: pl.DataFrame) -> pl.DataFrame:
     """
-    
+    Maps AFL venues to their respective geographic locations (e.g., 'MCG' -> 'VIC').
+
+    Args:
+        df: Polars DataFrame containing a 'venue' column.
+
+    Returns:
+        A Polars DataFrame with an additional 'venue_location' column.
     """
     # Load JSON as a Python dict
-    # TODO: make Path a variable for this function 
     with open(PROJECT_ROOT / "src/reference/venue_location_mapping.json") as f:
         venue_to_location = json.load(f)
 
@@ -33,7 +38,6 @@ def create_venue_location_feat(df: pl.DataFrame) -> pl.DataFrame:
 
     return venue_loc_df
 
-# TODO: make venue_tz_map and team_tz_map paths then add appropriate debugging, repeat for above function 
 def create_timezone_feats(
         venue_tz_map: pl.DataFrame, 
         team_tz_map: pl.DataFrame, 
