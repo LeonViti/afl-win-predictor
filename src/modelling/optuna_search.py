@@ -242,6 +242,93 @@ def get_best_mlflow_avg_threshold(study, trial_date_code):
 
     return best_avg_threshold
 
+def objective(trial, walk_folds):
+
+    params = {
+        "objective": "binary:logistic",
+        "eval_metric": "auc",
+        "seed": 42,
+        "device": "cpu",
+        "tree_method": "hist",  # recommended
+        "max_depth": trial.suggest_int("max_depth", 3, 10),
+        "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+        "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
+        "subsample": trial.suggest_float("subsample", 0.5, 1.0),
+        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+        "gamma": trial.suggest_float("gamma", 0.0, 5.0),
+        "reg_alpha": trial.suggest_float("reg_alpha", 0, 5.0),
+        "reg_lambda": trial.suggest_float("reg_lambda", 0, 5.0),        
+    }
+
+    fold_aucs = []
+    fold_thresholds = []
+    fold_accuracies = []
+    fold_best_rounds = []
+
+    for train_df, val_df in walk_folds:
+
+        X_train = train_df.drop(["win", "year", "weight"])
+        y_train = train_df["win"]
+        w_train = train_df["weight"]
+
+        X_val = val_df.drop(["win", "year", "weight"])
+        y_val = val_df["win"]
+        w_val = val_df["weight"]
+
+        # Class imbalance (exclude dummy rows)
+        y_effective = train_df.filter(pl.col("weight") == 1.0)["win"].to_numpy()
+        pos = (y_effective == 1).sum()
+        neg = (y_effective == 0).sum()
+        params["scale_pos_weight"] = neg / pos
+
+        dtrain = xgb.DMatrix(X_train, label=y_train, weight=w_train, enable_categorical=True)
+        dval = xgb.DMatrix(X_val, label=y_val, weight=w_val, enable_categorical=True)
+
+        evals_result = {}
+        model = xgb.train(
+            params,
+            dtrain,
+            num_boost_round=2000,
+            evals=[(dtrain, "train"), (dval, "validation")],
+            early_stopping_rounds=50,
+            evals_result=evals_result,
+            verbose_eval=False,
+        )
+
+        # make prediction on the validation set
+        y_val_pred = model.predict(dval)
+
+        # append metrics
+        best_t, best_acc = get_best_accuracy_threshold(y_val, y_val_pred)
+        fold_aucs.append(roc_auc_score(y_val, y_val_pred))
+        fold_thresholds.append(best_t)
+        fold_accuracies.append(best_acc)
+        fold_best_rounds.append(model.best_iteration + 1)  # add 1 because best_iteration is zero-indexed
+
+    # calculate mean metrics across folds
+    mean_auc = float(np.mean(fold_aucs))
+    mean_threshold = float(np.mean(fold_thresholds))
+    mean_accuracy = float(np.mean(fold_accuracies))
+    mean_best_rounds = int(np.mean(fold_best_rounds))
+
+    # define unique run name
+    run_name = f"trial_{trial.number}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    with mlflow.start_run(nested=True, run_name=run_name):
+        mlflow.log_params(params)
+        mlflow.log_metric("mean_val_auc", mean_auc)
+        mlflow.log_metric("mean_val_threshold", mean_threshold)
+        mlflow.log_metric("mean_val_accuracy", mean_accuracy)
+        mlflow.log_metric("mean_best_num_boost_rounds", mean_best_rounds)
+        mlflow.log_metric("num_folds", len(walk_folds))
+
+        for i, (auc, acc, t, rounds) in enumerate(zip(fold_aucs, fold_accuracies, fold_thresholds, fold_best_rounds)):
+            mlflow.log_metric(f"fold_{i+1}_auc", auc)
+            mlflow.log_metric(f"fold_{i+1}_accuracy", acc)
+            mlflow.log_metric(f"fold_{i+1}_threshold", t)
+            mlflow.log_metric(f"fold_{i+1}_best_rounds", rounds)
+
+    return mean_accuracy
+
 
 ################
 # Code
@@ -272,95 +359,7 @@ def main():
     # print fold windows
     print_fold_windows(walk_folds)
 
-    def objective(trial):
-
-        params = {
-            "objective": "binary:logistic",
-            "eval_metric": "auc",
-            "seed": 42,
-            "device": "cpu",
-            "tree_method": "hist",  # recommended
-            "max_depth": trial.suggest_int("max_depth", 3, 10),
-            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
-            "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
-            "subsample": trial.suggest_float("subsample", 0.5, 1.0),
-            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
-            "gamma": trial.suggest_float("gamma", 0.0, 5.0),
-            "reg_alpha": trial.suggest_float("reg_alpha", 0, 5.0),
-            "reg_lambda": trial.suggest_float("reg_lambda", 0, 5.0),        
-        }
-
-        fold_aucs = []
-        fold_thresholds = []
-        fold_accuracies = []
-        fold_best_rounds = []
-
-        for train_df, val_df in walk_folds:
-
-            X_train = train_df.drop(["win", "year", "weight"])
-            y_train = train_df["win"]
-            w_train = train_df["weight"]
-
-            X_val = val_df.drop(["win", "year", "weight"])
-            y_val = val_df["win"]
-            w_val = val_df["weight"]
-
-            # Class imbalance (exclude dummy rows)
-            y_effective = train_df.filter(pl.col("weight") == 1.0)["win"].to_numpy()
-            pos = (y_effective == 1).sum()
-            neg = (y_effective == 0).sum()
-            params["scale_pos_weight"] = neg / pos
-
-            dtrain = xgb.DMatrix(X_train, label=y_train, weight=w_train, enable_categorical=True)
-            dval = xgb.DMatrix(X_val, label=y_val, weight=w_val, enable_categorical=True)
-
-            evals_result = {}
-            model = xgb.train(
-                params,
-                dtrain,
-                num_boost_round=2000,
-                evals=[(dtrain, "train"), (dval, "validation")],
-                early_stopping_rounds=50,
-                evals_result=evals_result,
-                verbose_eval=False,
-            )
-
-            # make prediction on the validation set
-            y_val_pred = model.predict(dval)
-
-            # append metrics
-            best_t, best_acc = get_best_accuracy_threshold(y_val, y_val_pred)
-            fold_aucs.append(roc_auc_score(y_val, y_val_pred))
-            fold_thresholds.append(best_t)
-            fold_accuracies.append(best_acc)
-            fold_best_rounds.append(model.best_iteration + 1)  # add 1 because best_iteration is zero-indexed
-
-        # calculate mean metrics across folds
-        mean_auc = float(np.mean(fold_aucs))
-        mean_threshold = float(np.mean(fold_thresholds))
-        mean_accuracy = float(np.mean(fold_accuracies))
-        mean_best_rounds = int(np.mean(fold_best_rounds))
-
-        # define unique run name
-        run_name = f"trial_{trial.number}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        with mlflow.start_run(nested=True, run_name=run_name):
-            mlflow.log_params(params)
-            mlflow.log_metric("mean_val_auc", mean_auc)
-            mlflow.log_metric("mean_val_threshold", mean_threshold)
-            mlflow.log_metric("mean_val_accuracy", mean_accuracy)
-            mlflow.log_metric("mean_best_num_boost_rounds", mean_best_rounds)
-            mlflow.log_metric("num_folds", len(walk_folds))
-
-            for i, (auc, acc, t, rounds) in enumerate(zip(fold_aucs, fold_accuracies, fold_thresholds, fold_best_rounds)):
-                mlflow.log_metric(f"fold_{i+1}_auc", auc)
-                mlflow.log_metric(f"fold_{i+1}_accuracy", acc)
-                mlflow.log_metric(f"fold_{i+1}_threshold", t)
-                mlflow.log_metric(f"fold_{i+1}_best_rounds", rounds)
-
-        return mean_accuracy
-
-    # TODO: create optuna plots in mlflow
-
-    # Create the study and optimize
+    
+    # Create and run the optuna study 
     study = optuna.create_study(direction="maximize")
-    study.optimize(objective, n_trials=600, n_jobs=-1)  # n_trials can be larger
+    study.optimize(lambda trial: objective(trial, walk_folds), n_trials=10, n_jobs=-1)

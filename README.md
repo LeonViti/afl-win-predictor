@@ -4,6 +4,8 @@ This repo applies machine learning to predict whether a team will win or lose a 
 # Data Pipeline  
 data_ingestion -> features -> modelling -> evalutation  
 
+data_extractor.r -> parquet_combiner.py -> fixture_features.py -> optuna_search.py -> xgboost_model.py
+
 # Setup
 ## Dependencies
 This project uses [Task](https://taskfile.dev/) for environment setup and [UV](https://docs.astral.sh/uv/) for virtual environement management. Ensure they are installed before running this project. 

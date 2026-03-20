@@ -6,16 +6,11 @@ os.chdir(r"/home/lv/Documents/projects/afl-win-predictor")
 #####################
 # Libraries
 #####################
-import optuna
-import mlflow
-import datetime
-import mlflow.xgboost
 import numpy as np
 import polars as pl
 import xgboost as xgb
 
 from mlflow.tracking import MlflowClient
-from sklearn.metrics import accuracy_score, roc_auc_score
 
 from src.config import PROJECT_ROOT
 from src.features.fixture_features import compute_fixture_features
@@ -42,9 +37,9 @@ df = compute_fixture_features(path)
 cat_cols = ["ateam", "hteam", "venue_location", "time_of_day"]
 df_model = prepare_features(df, cat_cols)
 
-############
-# mlfow 
-############
+##########################################
+# RETRAIN THE BEST PERFORMING MODEL
+##########################################
 # load the best performing model from mlflow
 client = MlflowClient()
 experiment_id = client.get_experiment_by_name("afl_win_predictor").experiment_id
@@ -61,9 +56,6 @@ best_params = best_run.data.params
 best_boost_round = int(round(best_run.data.metrics.get("mean_best_num_boost_rounds"), 0))
 best_avg_threshold= best_run.data.metrics.get("mean_val_threshold")
 
-##########################################
-# RETRAIN THE BEST PERFORMING MODEL
-##########################################
 # Separate test season
 test_df = df_model.filter(pl.col("year") == 2025)
 
