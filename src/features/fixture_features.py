@@ -305,7 +305,8 @@ def compute_fixture_features(path):
         pl.col("margin").shift(1).over("team").alias("margin_lag1"),
         pl.col("localtime_dt").shift(1).over("team").alias("localtime_dt_lag1")
     ])
-
+    
+    # TODO: Update df naming conventions
     # Calculate the number of days since the team last played
     team_df = team_df.with_columns(
         ((pl.col("localtime_dt") - pl.col("localtime_dt_lag1")).dt.total_days())
