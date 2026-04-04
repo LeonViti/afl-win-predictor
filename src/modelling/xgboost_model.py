@@ -48,6 +48,7 @@ best_run = client.search_runs(
     experiment_ids=[experiment_id],
     max_results=1,
     order_by=["metrics.mean_val_auc DESC"] # Use DESC for accuracy
+    # order_by=["metrics.oof_accuracy DESC"] # Use DESC for accuracy
 )[0]
 
 # get best threshold, params, and num_boosting rounds
