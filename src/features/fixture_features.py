@@ -143,7 +143,7 @@ def calc_short_long_term_feats(
     
     return df
 
-def rename_lagged_features(
+def rename_windowed_features(
     df: pl.DataFrame,
     lagged_feats: list[str],
     prefix: str,
@@ -167,39 +167,6 @@ def rename_lagged_features(
     for suffix in suffixes:
         for window in [3, 5, 10, 20]:
             rename_dict[f"last{window}_{suffix}"] = f"{prefix}last{window}_{suffix}"
-
-    return df.rename(rename_dict)
-
-def rename_team_features(
-    df: pl.DataFrame,
-    lagged_feats: list[str],
-    prefix: str,
-    suffixes: list[str] = None,
-    if_lagged: bool = False,
-    team_name: str = "team"
-) -> pl.DataFrame:
-    """
-    Renames team level features that are not lagged for home/away joining.
-    
-    Args:
-        df: Dataframe containing team features.
-        lagged_feats: Features to prefix (e.g., ["win_lag1", "days_break"]).
-        prefix: Team prefix ("h" or "a").
-        suffixes: Rolling suffixes (e.g., ["win_rate"]). Ignored if if_lagged=True.
-        if_lagged: If True, only renames the team and the specified lagged_feats.
-    """
-    rename_dict = {team_name: f"{prefix}team"}
-
-    # Handle immediate lagged features (e.g. days_break)
-    for lagged_feat in lagged_feats:
-        rename_dict[lagged_feat] = f"{prefix}{lagged_feat}"
-
-    # Only process rolling windows if we aren't restricted to simple lags
-    if not if_lagged and suffixes is not None:
-        for suffix in suffixes:
-            for window in [3, 5, 10, 20]:
-                col_name = f"last{window}_{suffix}"
-                rename_dict[col_name] = f"{prefix}{col_name}"
 
     return df.rename(rename_dict)
 
@@ -334,16 +301,12 @@ def compute_fixture_features(path):
     ])
 
     # rename home and away lagged features for joining
-    hteam_df = rename_lagged_features(team_df, ["win_lag1", "score_lag1", "margin_lag1"], "h", ["win_rate", "avg_score", "avg_margin"])
-    ateam_df = rename_lagged_features(team_df, ["win_lag1", "score_lag1", "margin_lag1"], "a", ["win_rate", "avg_score", "avg_margin"])
+    hteam_df = rename_windowed_features(team_df, ["win_lag1", "score_lag1", "margin_lag1"], "h", ["win_rate", "avg_score", "avg_margin"])
+    ateam_df = rename_windowed_features(team_df, ["win_lag1", "score_lag1", "margin_lag1"], "a", ["win_rate", "avg_score", "avg_margin"])
 
-    # rename non-lagged features 
-    
-
-    # rename days_break column TODO: fix this up
-    days_df = team_df.select(["localtime_dt", "team", "days_break"])
-    hdays_df = rename_team_features(hteam_df, ["days_break"], "h", True, "hteam")
-    adays_df = rename_team_features(days_df, ["days_break"], "a", True, "team")
+    # rename non-lagged features (currently just days_break)
+    hteam_df = hteam_df.rename({"days_break": "hdays_break"})
+    ateam_df = ateam_df.rename({"days_break": "adays_break"})
 
     ###########################
     # MERGE BACK TO DF_CLEAN
@@ -363,6 +326,7 @@ def compute_fixture_features(path):
         how="left"
     )
 
+    # calculate the difference between home and away team stats
     df_clean = calc_diff_feats(df_clean, [3, 5, 10, 20], "win_rate")
     df_clean = calc_diff_feats(df_clean, [3, 5, 10, 20], "avg_score")
     df_clean = calc_diff_feats(df_clean, [3, 5, 10, 20], "avg_margin")
