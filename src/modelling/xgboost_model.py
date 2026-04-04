@@ -1,7 +1,6 @@
 # FOR INTERACTIVE SESSION comment out later
-import os
-# os.chdir(r"C:\Users\leon_\Documents\personal_projects\afl-win-predictor")
-os.chdir(r"/home/lv/Documents/projects/afl-win-predictor")
+# import os
+# os.chdir(r"/home/lv/Documents/projects/afl-win-predictor")
 
 #####################
 # Libraries
@@ -42,7 +41,7 @@ df_model = prepare_features(df, cat_cols)
 ##########################################
 # load the best performing model from mlflow
 client = MlflowClient()
-experiment_id = client.get_experiment_by_name("afl_win_predictor").experiment_id
+experiment_id = client.get_experiment_by_name("afl_win_predictor_v1").experiment_id
 
 # Find the best run based on metric
 best_run = client.search_runs(

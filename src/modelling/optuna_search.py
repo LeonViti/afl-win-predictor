@@ -81,7 +81,7 @@ def prepare_features(df: pl.DataFrame, cat_cols: list[str]) -> pl.DataFrame:
         "diff_last3_avg_margin", "diff_last5_avg_margin", "diff_last10_avg_margin", "diff_last20_avg_margin",
         # 'hlast3_win_rate', 'alast3_win_rate', 'hlast5_win_rate', 'alast5_win_rate',
         # 'hlast10_win_rate', 'alast10_win_rate', 'hlast20_win_rate', 'alast20_win_rate',
-        'is_interstate_game', "time_of_day", 'is_weekend_game',
+        'is_interstate_game', "time_of_day", 'is_weekend_game', 'adays_break', 'hdays_break', 'diff_days_break',
         'win'
     ])
 
@@ -216,32 +216,6 @@ def get_best_accuracy_threshold(
 
     return best_t, best_acc
 
-def get_best_mlflow_avg_threshold(study, trial_date_code):
-    """
-    trial_date = '20260308_205622'
-    """
-    # Best trial
-    best_trial = study.best_trial
-    print("Best Mean Validation Accuracy:", best_trial.value)
-    print("Best Hyperparameters:", best_trial.params)
-
-    # to get the best avg_threshold from MLflow
-    best_trial_number = best_trial.number  # Optuna best trial number
-
-    # Get the MLflow run corresponding to that trial
-    client = mlflow.tracking.MlflowClient()
-    experiment_id = mlflow.get_experiment_by_name("afl_win_predictor").experiment_id
-
-    runs = client.search_runs(
-        experiment_ids=[experiment_id],
-        filter_string=f"tags.mlflow.runName = 'trial_{best_trial_number}_{trial_date_code}'"
-    )
-
-    best_run = runs[0]  # should be exactly one
-    best_avg_threshold = best_run.data.metrics["mean_val_threshold"]
-
-    return best_avg_threshold
-
 def objective(trial, walk_folds):
 
     params = {
@@ -312,7 +286,7 @@ def objective(trial, walk_folds):
     mean_best_rounds = int(np.mean(fold_best_rounds))
 
     # define unique run name
-    run_name = f"trial_{trial.number}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    run_name = f"trial_{trial.number}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
     with mlflow.start_run(nested=True, run_name=run_name):
         mlflow.log_params(params)
         mlflow.log_metric("mean_val_auc", mean_auc)
@@ -342,7 +316,7 @@ def main():
     df_model = prepare_features(df, cat_cols)
 
     # --- ROLLING WALK FORWARD SET-UP ---
-    mlflow.set_experiment("afl_win_predictor")
+    mlflow.set_experiment("afl_win_predictor_v1")
 
     cat_cols = ["ateam", "hteam", "venue_location", "time_of_day"]
     df_model = prepare_features(df, cat_cols)
@@ -359,7 +333,6 @@ def main():
     # print fold windows
     print_fold_windows(walk_folds)
 
-    
     # Create and run the optuna study 
     study = optuna.create_study(direction="maximize")
-    study.optimize(lambda trial: objective(trial, walk_folds), n_trials=10, n_jobs=-1)
+    study.optimize(lambda trial: objective(trial, walk_folds), n_trials=100, n_jobs=-1)
