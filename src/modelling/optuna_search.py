@@ -85,6 +85,19 @@ def prepare_features(df: pl.DataFrame, cat_cols: list[str]) -> pl.DataFrame:
         'win'
     ])
 
+    # df_clean = df_clean.select([
+    #     'ateam', 'ateamid', 'hteam', 'hteamid', 'is_final', 'is_grand_final', 'localtime_dt',
+    #     'round', 'winner', 'year', 'venue_location', 'tz_shift_advantage', 
+    #     'hwin_lag1', 'awin_lag1', 'hscore_lag1', 'ascore_lag1', 'hmargin_lag1', 'amargin_lag1',
+    #     "diff_last3_win_rate", "diff_last5_win_rate", "diff_last10_win_rate", "diff_last20_win_rate",
+    #     "diff_last3_avg_score", "diff_last5_avg_score", "diff_last10_avg_score", "diff_last20_avg_score",
+    #     "diff_last3_avg_margin", "diff_last5_avg_margin", "diff_last10_avg_margin", "diff_last20_avg_margin",
+    #     # 'hlast3_win_rate', 'alast3_win_rate', 'hlast5_win_rate', 'alast5_win_rate',
+    #     # 'hlast10_win_rate', 'alast10_win_rate', 'hlast20_win_rate', 'alast20_win_rate',
+    #     'is_interstate_game', "time_of_day", 'is_weekend_game', 'adays_break', 'hdays_break', 'diff_days_break',
+    #     'win'
+    # ])
+
 
     df_clean = df_clean.drop(['ateamid', 'hteamid', 'winner', 'localtime_dt'])
 
@@ -316,8 +329,6 @@ def main():
     df_model = prepare_features(df, cat_cols)
 
     # --- ROLLING WALK FORWARD SET-UP ---
-    mlflow.set_experiment("afl_win_predictor_v1")
-
     cat_cols = ["ateam", "hteam", "venue_location", "time_of_day"]
     df_model = prepare_features(df, cat_cols)
 
@@ -333,6 +344,19 @@ def main():
     # print fold windows
     print_fold_windows(walk_folds)
 
+    # set mlflow experiment
+    mlflow.set_experiment("afl_win_predictor_v1")
+
     # Create and run the optuna study 
     study = optuna.create_study(direction="maximize")
-    study.optimize(lambda trial: objective(trial, walk_folds), n_trials=100, n_jobs=-1)
+
+    study.optimize(lambda trial: objective(trial, walk_folds), n_trials=500, n_jobs=-1)
+
+    # consider using method as below for more advanced hyperparam tuning
+    # study = optuna.create_study(
+    #     study_name="my_study",
+    #     storage="sqlite:///my_study.db",
+    #     load_if_exists=True
+    # )
+
+    
