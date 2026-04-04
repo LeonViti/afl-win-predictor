@@ -314,7 +314,96 @@ def objective(trial, walk_folds):
             mlflow.log_metric(f"fold_{i+1}_threshold", t)
             mlflow.log_metric(f"fold_{i+1}_best_rounds", rounds)
 
-    return mean_accuracy
+    return mean_auc
+
+def objective(trial, walk_folds):
+
+    params = {
+        "objective": "binary:logistic",
+        "eval_metric": "auc",
+        "seed": 42,
+        "device": "cpu",
+        "tree_method": "hist",
+        "max_depth": trial.suggest_int("max_depth", 3, 10),
+        "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+        "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
+        "subsample": trial.suggest_float("subsample", 0.5, 1.0),
+        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+        "gamma": trial.suggest_float("gamma", 0.0, 5.0),
+        "reg_alpha": trial.suggest_float("reg_alpha", 0, 5.0),
+        "reg_lambda": trial.suggest_float("reg_lambda", 0, 5.0),        
+    }
+
+    fold_aucs = []
+    fold_best_rounds = []
+
+    # store out of fold (OOF) predictions
+    all_val_preds = []
+    all_val_targets = []
+
+    for train_df, val_df in walk_folds:
+
+        X_train = train_df.drop(["win", "year", "weight"])
+        y_train = train_df["win"]
+        w_train = train_df["weight"]
+
+        X_val = val_df.drop(["win", "year", "weight"])
+        y_val = val_df["win"]
+        w_val = val_df["weight"]
+
+        # class imbalance
+        y_effective = train_df.filter(pl.col("weight") == 1.0)["win"].to_numpy()
+        pos = (y_effective == 1).sum()
+        neg = (y_effective == 0).sum()
+        params["scale_pos_weight"] = neg / pos
+
+        dtrain = xgb.DMatrix(X_train, label=y_train, weight=w_train, enable_categorical=True)
+        dval = xgb.DMatrix(X_val, label=y_val, weight=w_val, enable_categorical=True)
+
+        model = xgb.train(
+            params,
+            dtrain,
+            num_boost_round=2000,
+            evals=[(dtrain, "train"), (dval, "validation")],
+            early_stopping_rounds=50,
+            verbose_eval=False,
+        )
+
+        y_val_pred = model.predict(dval)
+
+        # store fold metrics
+        fold_aucs.append(roc_auc_score(y_val, y_val_pred))
+        fold_best_rounds.append(model.best_iteration + 1)
+
+        # store OOF predictions
+        all_val_preds.append(y_val_pred)
+        all_val_targets.append(y_val.to_numpy())
+
+    # =========================
+    # GLOBAL THRESHOLD STEP
+    # =========================
+    all_preds = np.concatenate(all_val_preds)
+    all_y = np.concatenate(all_val_targets)
+
+    best_t, best_acc = get_best_accuracy_threshold(
+        pl.Series(all_y),
+        all_preds
+    )
+
+    mean_auc = float(np.mean(fold_aucs))
+    mean_best_rounds = int(np.mean(fold_best_rounds))
+
+    # logging
+    run_name = f"trial_{trial.number}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+    with mlflow.start_run(nested=True, run_name=run_name):
+        mlflow.log_params(params)
+        mlflow.log_metric("mean_val_auc", mean_auc)
+        mlflow.log_metric("oof_best_threshold", float(best_t))
+        mlflow.log_metric("oof_accuracy", float(best_acc))
+        mlflow.log_metric("mean_best_num_boost_rounds", mean_best_rounds)
+
+    # optimise on OOF accuracy (NOT per-fold avg)
+    return mean_auc
 
 
 ################
@@ -345,12 +434,12 @@ def main():
     print_fold_windows(walk_folds)
 
     # set mlflow experiment
-    mlflow.set_experiment("afl_win_predictor_v1")
+    mlflow.set_experiment("afl_win_predictor_v1.1")
 
     # Create and run the optuna study 
     study = optuna.create_study(direction="maximize")
 
-    study.optimize(lambda trial: objective(trial, walk_folds), n_trials=500, n_jobs=-1)
+    study.optimize(lambda trial: objective(trial, walk_folds), n_trials=100, n_jobs=-1)
 
     # consider using method as below for more advanced hyperparam tuning
     # study = optuna.create_study(

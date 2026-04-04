@@ -41,19 +41,20 @@ df_model = prepare_features(df, cat_cols)
 ##########################################
 # load the best performing model from mlflow
 client = MlflowClient()
-experiment_id = client.get_experiment_by_name("afl_win_predictor_v1").experiment_id
+experiment_id = client.get_experiment_by_name("afl_win_predictor_v1.1").experiment_id
 
 # Find the best run based on metric
 best_run = client.search_runs(
     experiment_ids=[experiment_id],
     max_results=1,
-    order_by=["metrics.mean_val_accuracy DESC"] # Use DESC for accuracy
+    order_by=["metrics.mean_val_auc DESC"] # Use DESC for accuracy
 )[0]
 
 # get best threshold, params, and num_boosting rounds
 best_params = best_run.data.params
 best_boost_round = int(round(best_run.data.metrics.get("mean_best_num_boost_rounds"), 0))
-best_avg_threshold= best_run.data.metrics.get("mean_val_threshold")
+# best_avg_threshold= best_run.data.metrics.get("mean_val_threshold")
+best_avg_threshold= best_run.data.metrics.get("oof_best_threshold")
 
 # Separate test season
 test_df = df_model.filter(pl.col("year") == 2025)
@@ -101,6 +102,7 @@ final_model = xgb.train(
 )
 
 # PLOT THE BASE TEST CONFUSION MATRIX
+plot_confusion_matrix(final_model, dtest, y_test, "Test")
 plot_confusion_matrix(final_model, dtest, y_test, "Test", threshold=best_avg_threshold)
 
 # Plotting the feature importance
