@@ -439,7 +439,7 @@ def main():
     # Create and run the optuna study 
     study = optuna.create_study(direction="maximize")
 
-    study.optimize(lambda trial: objective(trial, walk_folds), n_trials=500, n_jobs=-1)
+    study.optimize(lambda trial: objective(trial, walk_folds), n_trials=100, n_jobs=-1)
 
     # consider using method as below for more advanced hyperparam tuning
     # study = optuna.create_study(
