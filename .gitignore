@@ -19,3 +19,4 @@ __pycache__
 # MLFlow
 mlflow.db
 mlruns/
+mlflow.db-journal
