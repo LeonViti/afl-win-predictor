@@ -269,6 +269,8 @@ def compute_fixture_features(path):
         .alias("is_weekend_game")
     )
 
+    # TODO: create an is home ground flag: hteam_ground == venue
+
     # CREATE WINDOWED FEATS # TODO: make into function 
     # melt home and away sides to long format (team lvl); store if the team won or lost
     home_df = df_clean.select([ # select all home team games
@@ -298,15 +300,14 @@ def compute_fixture_features(path):
     # concatenate teams so each row represents one team and sort by date
     team_df = pl.concat([home_df, away_df]).sort(["team", "localtime_dt"])  # ensure correct order
 
+    # shift stats by 1 to exclude current game for each team
     team_df = team_df.with_columns([
-        # shift wins by 1 to exclude current game for each team
         pl.col("score").shift(1).over("team").alias("score_lag1"),
         pl.col("win").shift(1).over("team").alias("win_lag1"),
         pl.col("margin").shift(1).over("team").alias("margin_lag1"),
         pl.col("localtime_dt").shift(1).over("team").alias("localtime_dt_lag1")
     ])
     
-    # TODO: Update df naming conventions
     # Calculate the number of days since the team last played
     team_df = team_df.with_columns(
         ((pl.col("localtime_dt") - pl.col("localtime_dt_lag1")).dt.total_days())
@@ -320,8 +321,6 @@ def compute_fixture_features(path):
     team_df = calc_short_long_term_feats(team_df, "score_lag1", "avg_score")
     team_df = calc_short_long_term_feats(team_df, "margin_lag1", "avg_margin")
 
-    # TODO: create an is home ground flag: hteam_ground == venue
-
     # Fill nulls with 0 as events are rare
     team_df = team_df.fill_null(0)
 
@@ -334,7 +333,7 @@ def compute_fixture_features(path):
     ])
 
     # rename home and away feats for join
-    hwin_rate = rename_team_features(win_rate, ["win_lag1", "score_lag1", "margin_lag1"], "h", ["win_rate", "avg_score", "avg_margin"])
+    hwin_df = rename_team_features(win_rate, ["win_lag1", "score_lag1", "margin_lag1"], "h", ["win_rate", "avg_score", "avg_margin"])
     awin_rate = rename_team_features(win_rate, ["win_lag1", "score_lag1", "margin_lag1"], "a", ["win_rate", "avg_score", "avg_margin"])
 
     # rename days_break column TODO: fix this up
