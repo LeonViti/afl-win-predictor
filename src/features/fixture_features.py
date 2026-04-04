@@ -170,7 +170,46 @@ def rename_windowed_features(
 
     return df.rename(rename_dict)
 
-def calc_diff_feats(df, windows: list[int], suffix: str):
+def subtract_home_away_features(
+    df: pl.DataFrame, 
+    general_col_name: str
+) -> pl.DataFrame:
+    """
+    Subtracts the corresponding home and away columns to create a diff feature. 
+
+    Args:
+        df: dataframe containing team features
+        general_col_name: feature you want to compare, e.g. days_break
+
+    Returns:
+        pl.DataFrame with new comparison features. 
+    """
+
+    df = df.with_columns([
+        (pl.col(f"h{general_col_name}") - pl.col(f"a{general_col_name}"))
+            .alias(f"diff_{general_col_name}")
+    ])
+
+    return df
+
+def subtract_home_away_windowed_features(
+    df: pl.DataFrame, 
+    windows: list[int], 
+    suffix: str
+) -> pl.DataFrame:
+    """
+    Subtracts the corresponding home and away columns for windowed features. 
+
+    Args:
+        df: dataframe containing team home and away features
+        windows: list of time windows to iterate over.
+        suffix: general name of column you want to target e.g. win_rate.
+        general_col_name: feature you want to compare, e.g. days_break
+
+    Returns:
+        pl.DataFrame with new comparison features. 
+    """
+
     df = df.with_columns([
         (pl.col(f"hlast{w}_{suffix}") - pl.col(f"alast{w}_{suffix}"))
             .alias(f"diff_last{w}_{suffix}")
@@ -326,11 +365,13 @@ def compute_fixture_features(path):
         how="left"
     )
 
-    # calculate the difference between home and away team stats
-    df_clean = calc_diff_feats(df_clean, [3, 5, 10, 20], "win_rate")
-    df_clean = calc_diff_feats(df_clean, [3, 5, 10, 20], "avg_score")
-    df_clean = calc_diff_feats(df_clean, [3, 5, 10, 20], "avg_margin")
+    # calculate the difference between home and away team for non-windowed features
+    df_clean = subtract_home_away_features(df_clean, "days_break")
 
+    # calculate the difference between home and away team for windowed features
+    df_clean = subtract_home_away_windowed_features(df_clean, [3, 5, 10, 20], "win_rate")
+    df_clean = subtract_home_away_windowed_features(df_clean, [3, 5, 10, 20], "avg_score")
+    df_clean = subtract_home_away_windowed_features(df_clean, [3, 5, 10, 20], "avg_margin")
 
     return df_clean
 
