@@ -143,14 +143,14 @@ def calc_short_long_term_feats(
     
     return df
 
-def rename_team_features(
+def rename_lagged_features(
     df: pl.DataFrame,
     lagged_feats: list[str],
     prefix: str,
     suffixes: list[str]
 ) -> pl.DataFrame:
     """
-    Renames team-level features so they can be joined as home or away features.
+    Renames team-level lagged features so they can be joined as home or away features.
 
     Args:
         df: dataframe containing team features
@@ -179,7 +179,7 @@ def rename_team_features(
     team_name: str = "team"
 ) -> pl.DataFrame:
     """
-    Renames team level features for home/away joins.
+    Renames team level features that are not lagged for home/away joining.
     
     Args:
         df: Dataframe containing team features.
@@ -321,43 +321,51 @@ def compute_fixture_features(path):
     team_df = calc_short_long_term_feats(team_df, "score_lag1", "avg_score")
     team_df = calc_short_long_term_feats(team_df, "margin_lag1", "avg_margin")
 
+    # TODO: review this exclusion of nulls
     # Fill nulls with 0 as events are rare
     team_df = team_df.fill_null(0)
 
     # Last 5 games win rate per team
-    win_rate = team_df.select([
+    team_df = team_df.select([
         "localtime_dt", "team", "days_break",
         "win_lag1", "last3_win_rate", "last5_win_rate", "last10_win_rate", "last20_win_rate",
         "score_lag1", "last3_avg_score", "last5_avg_score", "last10_avg_score", "last20_avg_score",
         "margin_lag1", "last3_avg_margin", "last5_avg_margin", "last10_avg_margin", "last20_avg_margin"
     ])
 
-    # rename home and away feats for join
-    hwin_df = rename_team_features(win_rate, ["win_lag1", "score_lag1", "margin_lag1"], "h", ["win_rate", "avg_score", "avg_margin"])
-    awin_rate = rename_team_features(win_rate, ["win_lag1", "score_lag1", "margin_lag1"], "a", ["win_rate", "avg_score", "avg_margin"])
+    # rename home and away lagged features for joining
+    hteam_df = rename_lagged_features(team_df, ["win_lag1", "score_lag1", "margin_lag1"], "h", ["win_rate", "avg_score", "avg_margin"])
+    ateam_df = rename_lagged_features(team_df, ["win_lag1", "score_lag1", "margin_lag1"], "a", ["win_rate", "avg_score", "avg_margin"])
+
+    # rename non-lagged features 
+    
 
     # rename days_break column TODO: fix this up
     days_df = team_df.select(["localtime_dt", "team", "days_break"])
-    hdays_df = rename_team_features(days_df, ["days_break"], "h", True, "team")
+    hdays_df = rename_team_features(hteam_df, ["days_break"], "h", True, "hteam")
     adays_df = rename_team_features(days_df, ["days_break"], "a", True, "team")
+
+    ###########################
+    # MERGE BACK TO DF_CLEAN
+    ###########################
 
     # Merge home features
     df_clean = df_clean.join(
-        hwin_rate,
+        hteam_df,
         on=["localtime_dt", "hteam"],
         how="left"
     )
 
     # Merge away features
     df_clean = df_clean.join(
-        awin_rate,
+        ateam_df,
         on=["localtime_dt", "ateam"],
         how="left"
     )
 
     df_clean = calc_diff_feats(df_clean, [3, 5, 10, 20], "win_rate")
     df_clean = calc_diff_feats(df_clean, [3, 5, 10, 20], "avg_score")
-    df_clean = calc_diff_feats(df_clean, [3,5,10,20], "avg_margin")
+    df_clean = calc_diff_feats(df_clean, [3, 5, 10, 20], "avg_margin")
 
 
     return df_clean
